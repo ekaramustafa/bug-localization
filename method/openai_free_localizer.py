@@ -10,37 +10,30 @@ from method.models import OpenAILocalizerResponse
 from method.llm import LLMClientGenerator
 from dataset.utils import get_token_count, chunk_code_files, estimate_prompt_tokens
 
-class OpenAILocalizer(BugLocalizationMethod):
+class OpenAIFreeLocalizer(BugLocalizationMethod):
     def __init__(self):
         super().__init__()
         load_dotenv()
-        self.api_key = os.getenv("OPENAI_API_KEY")
-        self.llm = LLMClientGenerator(api_key=self.api_key)
+        self.openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+        
+        self.llm = LLMClientGenerator(use_openrouter=True, openrouter_api_key=self.openrouter_api_key)
         self.prompt_generator = PromptGenerator()
 
-    def localize(self, bug, max_prompt_tokens=16000, max_chunk_tokens=8000):
-        """
-        Localize bugs with intelligent chunking strategy.
-        
-        Args:
-            bug: BugInstance object
-            max_prompt_tokens: Maximum total tokens per prompt (default: 16k for gpt-4o)
-            max_chunk_tokens: Maximum tokens per code file chunk (default: 8k)
-        """
-        model = "gpt-4o"
+    def localize(self, bug, max_prompt_tokens=120000, max_chunk_tokens=60000):
+        model = "openai-free"  # Maps to "openai/gpt-oss-20b:free"
         
         # Count tokens in the bug report using the utility function
-        token_count = get_token_count(bug.to_string(), model=model)
+        token_count = get_token_count(bug.to_string(), model="gpt-4o")  # Use gpt-4o for tokenization
 
-        # If the bug report is too long, summarize it
-        if token_count > 4096:
+        # With 130k context, we can handle much larger bug reports before summarizing
+        if token_count > max_prompt_tokens:  # Increased threshold due to larger context window
             prompt = self.prompt_generator.generate_openai_report_summarizer_prompt(bug)
-            bug_report = self.llm.invoke(prompt)
+            bug_report = self.llm.invoke(prompt, model_type=model)
             # Update the bug object with the summarized report
             bug.bug_report = bug_report
         
         # Check if code files need chunking
-        code_files_tokens = get_token_count("\n\n".join(bug.code_files), model)
+        code_files_tokens = get_token_count("\n\n".join(bug.code_files), "gpt-4o")
         
         if code_files_tokens <= max_chunk_tokens:
             # No chunking needed - process normally
@@ -58,7 +51,7 @@ class OpenAILocalizer(BugLocalizationMethod):
             print(f"Code files require chunking: {code_files_tokens} tokens > {max_chunk_tokens} limit")
             
             # Split code files into manageable chunks
-            chunks = chunk_code_files(bug.code_files, max_chunk_tokens, model)
+            chunks = chunk_code_files(bug.code_files, max_chunk_tokens, "gpt-4o")
             
             chunk_responses = []
             
@@ -67,7 +60,7 @@ class OpenAILocalizer(BugLocalizationMethod):
                 print(f"Processing chunk {i+1}/{len(chunks)} with {len(chunk)} files...")
                 
                 # Estimate total prompt tokens for this chunk
-                estimated_tokens = estimate_prompt_tokens(bug, chunk, model)
+                estimated_tokens = estimate_prompt_tokens(bug, chunk, "gpt-4o")
                 
                 if estimated_tokens > max_prompt_tokens:
                     print(f"Warning: Chunk {i+1} estimated at {estimated_tokens} tokens, may exceed model limits")
@@ -108,14 +101,6 @@ class OpenAILocalizer(BugLocalizationMethod):
                 )
     
     def _aggregate_chunk_responses(self, bug, chunk_responses, model):
-        """
-        Aggregate responses from multiple chunks into a final response.
-        
-        Args:
-            bug: BugInstance object
-            chunk_responses: List of OpenAILocalizerResponse objects
-            model: Model name
-        """
         print(f"Aggregating {len(chunk_responses)} chunk responses...")
         
         # Convert structured responses to text for aggregation
