@@ -75,20 +75,38 @@ def get_token_count(text: str, model: str = "gpt-4") -> int:
         # Fallback: rough estimate (1 token ≈ 4 characters)
         return len(text) // 4
 
-def calculate_dataset_token_stats(bug_instances, model="gpt-4o"):
+def calculate_dataset_token_stats(bug_instances, model="gpt-4o", sample_size=1000):
     """
     Calculate token statistics for a dataset of bug instances.
     
     Args:
         bug_instances: List of BugInstance objects
         model: Model name for token counting
+        sample_size: Number of instances to sample for efficient calculation (default: 1000)
     
     Returns:
         Dictionary with token statistics
     """
+    import random
+    
+    logger = get_logger(__name__)
+    
+    # Sample instances if dataset is larger than sample_size
+    original_count = len(bug_instances)
+    if len(bug_instances) > sample_size:
+        sampled_instances = random.sample(bug_instances, sample_size)
+        is_sampled = True
+        logger.info(f"Sampling {sample_size} instances from {original_count} for token calculation")
+    else:
+        sampled_instances = bug_instances
+        is_sampled = False
+    
     token_counts = []
     
-    for bug in bug_instances:
+    for i, bug in enumerate(sampled_instances):
+        if i % 100 == 0 and len(sampled_instances) > 100:
+            logger.debug(f"Processing token count {i}/{len(sampled_instances)}")
+            
         # Count tokens in the bug report
         bug_report_tokens = get_token_count(bug.bug_report, model)
         
@@ -114,12 +132,141 @@ def calculate_dataset_token_stats(bug_instances, model="gpt-4o"):
     total_tokens_list = [tc['total_tokens'] for tc in token_counts]
     
     stats = {
-        'total_instances': len(token_counts),
+        'total_instances': original_count,  # Report original count
+        'sample_size': len(sampled_instances),
+        'is_sampled': is_sampled,
         'mean_tokens': sum(total_tokens_list) / len(total_tokens_list),
         'min_tokens': min(total_tokens_list),
         'max_tokens': max(total_tokens_list),
         'total_tokens': sum(total_tokens_list),
+        'estimated_total_tokens': int((sum(total_tokens_list) / len(total_tokens_list)) * original_count) if is_sampled else sum(total_tokens_list),
         'detailed_counts': token_counts
     }
     
     return stats
+
+def chunk_code_files(code_files: list[str], max_chunk_tokens: int = 8000, model: str = "gpt-4o") -> list[list[str]]:
+    """
+    Intelligently chunk code files to fit within token limits.
+    
+    Args:
+        code_files: List of code file paths/content
+        max_chunk_tokens: Maximum tokens per chunk (default: 8000 to leave room for prompt)
+        model: Model name for token counting
+    
+    Returns:
+        List of chunks, where each chunk is a list of code files
+    """
+    if not code_files:
+        return []
+    
+    logger = get_logger(__name__)
+    chunks = []
+    current_chunk = []
+    current_chunk_tokens = 0
+    
+    for i, code_file in enumerate(code_files):
+        # Get token count for this individual file
+        file_tokens = get_token_count(code_file, model)
+        
+        # If a single file exceeds max_chunk_tokens, we need to split it further
+        if file_tokens > max_chunk_tokens:
+            logger.warning(f"File {i} has {file_tokens} tokens, exceeding max chunk size. Will be split separately.")
+            
+            # Save current chunk if it has content
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = []
+                current_chunk_tokens = 0
+            
+            # Split the large file into smaller pieces
+            file_chunks = split_large_file(code_file, max_chunk_tokens, model)
+            chunks.extend([[chunk] for chunk in file_chunks])
+            continue
+        
+        # Check if adding this file would exceed the token limit
+        if current_chunk_tokens + file_tokens > max_chunk_tokens and current_chunk:
+            # Save the current chunk and start a new one
+            chunks.append(current_chunk)
+            current_chunk = [code_file]
+            current_chunk_tokens = file_tokens
+        else:
+            # Add to current chunk
+            current_chunk.append(code_file)
+            current_chunk_tokens += file_tokens
+    
+    # Add the last chunk if it has content
+    if current_chunk:
+        chunks.append(current_chunk)
+    
+    logger.info(f"Split {len(code_files)} code files into {len(chunks)} chunks")
+    for i, chunk in enumerate(chunks):
+        chunk_tokens = get_token_count("\n\n".join(chunk), model)
+        logger.debug(f"Chunk {i+1}: {len(chunk)} files, {chunk_tokens} tokens")
+    
+    return chunks
+
+def split_large_file(file_content: str, max_tokens: int, model: str = "gpt-4o") -> list[str]:
+    """
+    Split a large file into smaller chunks while preserving structure.
+    
+    Args:
+        file_content: The content of the file to split
+        max_tokens: Maximum tokens per chunk
+        model: Model name for token counting
+    
+    Returns:
+        List of file content chunks
+    """
+    logger = get_logger(__name__)
+    
+    # Try to split by logical boundaries (functions, classes, etc.)
+    lines = file_content.split('\n')
+    chunks = []
+    current_chunk_lines = []
+    current_chunk_tokens = 0
+    
+    for line in lines:
+        line_tokens = get_token_count(line + '\n', model)
+        
+        # If adding this line would exceed the limit and we have content, save chunk
+        if current_chunk_tokens + line_tokens > max_tokens and current_chunk_lines:
+            chunks.append('\n'.join(current_chunk_lines))
+            current_chunk_lines = [line]
+            current_chunk_tokens = line_tokens
+        else:
+            current_chunk_lines.append(line)
+            current_chunk_tokens += line_tokens
+    
+    # Add the last chunk
+    if current_chunk_lines:
+        chunks.append('\n'.join(current_chunk_lines))
+    
+    logger.info(f"Split large file into {len(chunks)} chunks")
+    return chunks
+
+def estimate_prompt_tokens(bug_instance, chunk: list[str], model: str = "gpt-4o") -> int:
+    """
+    Estimate total prompt tokens for a bug instance with a specific code file chunk.
+    
+    Args:
+        bug_instance: BugInstance object
+        chunk: List of code files for this chunk
+        model: Model name for token counting
+    
+    Returns:
+        Estimated total prompt tokens
+    """
+    # Calculate base prompt tokens (bug report, hints, etc.)
+    base_tokens = (
+        get_token_count(bug_instance.bug_report, model) +
+        get_token_count(bug_instance.hints_text, model) +
+        get_token_count(bug_instance.repo, model) +
+        get_token_count(bug_instance.instance_id, model) +
+        200  # Approximate tokens for prompt template and formatting
+    )
+    
+    # Add chunk tokens
+    chunk_tokens = get_token_count("\n\n".join(chunk), model)
+    
+    return base_tokens + chunk_tokens
