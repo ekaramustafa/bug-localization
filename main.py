@@ -1,4 +1,5 @@
 from dataset.swebench import SWEBench
+from dataset.beetlebox import BeetleBox
 from method.openai_localizer import OpenAILocalizer
 from dataset.utils import setup_logging, get_logger
 import logging
@@ -12,15 +13,24 @@ def main():
     logger.info("Starting...")
     
     try:
-        instance = SWEBench()
+        # instance = SWEBench()
+        instance = BeetleBox()
         localizer = OpenAILocalizer()
-        bug_instances = instance.get_bug_instances()
+        
+        # Example 1: Get all instances (default behavior)
+        # bug_instances = instance.get_bug_instances()
+        
+        # Example 2: Get first 10 instances
+        # bug_instances = instance.get_bug_instances(sample_size=10)
+        
+        # Example 3: Get 10 random instances with reproducible seed
+        bug_instances = instance.get_bug_instances(sample_size=10, random_sample=True, random_seed=42)
+        
         logger.info(f"Retrieved {len(bug_instances)} bug instances")
-
         # Get dataset token statistics
         token_stats = instance.get_token_statistics()
         print(token_stats)
-        return 
+        return
         logger.info(f"Total repo: {len(instance.repos)}")
         responses = {}
         for i, bug in enumerate(bug_instances): 

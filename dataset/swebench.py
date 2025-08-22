@@ -103,19 +103,35 @@ class SWEBench(BugLocalizationDataset):
         logger.info(f"Successfully processed all {len(self._bug_instances)} bug instances")
         return self._bug_instances
 
-    def get_token_statistics(self, model="gpt-4o"):
-        """Get token count statistics for the entire dataset."""
+    def get_token_statistics(self, model="gpt-4o", sample_size=1000):
+        """
+        Get token count statistics for the entire dataset with efficient sampling.
+        
+        Args:
+            model: Model name for token counting
+            sample_size: Number of instances to sample for calculation (default: 1000)
+        
+        Returns:
+            Dictionary with token statistics including estimated totals
+        """
         if not self._bug_instances:
             self.get_bug_instances()
         
-        stats = calculate_dataset_token_stats(self._bug_instances, model)
+        stats = calculate_dataset_token_stats(self._bug_instances, model, sample_size=sample_size)
         
         logger.info(f"Dataset Token Statistics ({model}):")
-        logger.info(f"  Total instances: {stats['total_instances']}")
+        logger.info(f"  Total instances: {stats['total_instances']:,}")
+        if stats['is_sampled']:
+            logger.info(f"  Sample size: {stats['sample_size']:,}")
+            logger.info(f"  ⚠️  Statistics calculated from sample")
         logger.info(f"  Mean tokens per instance: {stats['mean_tokens']:.2f}")
-        logger.info(f"  Min tokens: {stats['min_tokens']}")
-        logger.info(f"  Max tokens: {stats['max_tokens']}")
-        logger.info(f"  Total tokens across dataset: {stats['total_tokens']:,}")
+        logger.info(f"  Min tokens: {stats['min_tokens']:,}")
+        logger.info(f"  Max tokens: {stats['max_tokens']:,}")
+        if stats['is_sampled']:
+            logger.info(f"  Estimated total tokens: {stats['estimated_total_tokens']:,}")
+        else:
+            logger.info(f"  Total tokens across dataset: {stats['total_tokens']:,}")
         
         return stats
+    
 

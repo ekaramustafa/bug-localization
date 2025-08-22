@@ -75,20 +75,38 @@ def get_token_count(text: str, model: str = "gpt-4") -> int:
         # Fallback: rough estimate (1 token ≈ 4 characters)
         return len(text) // 4
 
-def calculate_dataset_token_stats(bug_instances, model="gpt-4o"):
+def calculate_dataset_token_stats(bug_instances, model="gpt-4o", sample_size=1000):
     """
     Calculate token statistics for a dataset of bug instances.
     
     Args:
         bug_instances: List of BugInstance objects
         model: Model name for token counting
+        sample_size: Number of instances to sample for efficient calculation (default: 1000)
     
     Returns:
         Dictionary with token statistics
     """
+    import random
+    
+    logger = get_logger(__name__)
+    
+    # Sample instances if dataset is larger than sample_size
+    original_count = len(bug_instances)
+    if len(bug_instances) > sample_size:
+        sampled_instances = random.sample(bug_instances, sample_size)
+        is_sampled = True
+        logger.info(f"Sampling {sample_size} instances from {original_count} for token calculation")
+    else:
+        sampled_instances = bug_instances
+        is_sampled = False
+    
     token_counts = []
     
-    for bug in bug_instances:
+    for i, bug in enumerate(sampled_instances):
+        if i % 100 == 0 and len(sampled_instances) > 100:
+            logger.debug(f"Processing token count {i}/{len(sampled_instances)}")
+            
         # Count tokens in the bug report
         bug_report_tokens = get_token_count(bug.bug_report, model)
         
@@ -114,11 +132,14 @@ def calculate_dataset_token_stats(bug_instances, model="gpt-4o"):
     total_tokens_list = [tc['total_tokens'] for tc in token_counts]
     
     stats = {
-        'total_instances': len(token_counts),
+        'total_instances': original_count,  # Report original count
+        'sample_size': len(sampled_instances),
+        'is_sampled': is_sampled,
         'mean_tokens': sum(total_tokens_list) / len(total_tokens_list),
         'min_tokens': min(total_tokens_list),
         'max_tokens': max(total_tokens_list),
         'total_tokens': sum(total_tokens_list),
+        'estimated_total_tokens': int((sum(total_tokens_list) / len(total_tokens_list)) * original_count) if is_sampled else sum(total_tokens_list),
         'detailed_counts': token_counts
     }
     
