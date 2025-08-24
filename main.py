@@ -26,12 +26,12 @@ def main():
         # bug_instances = instance.get_bug_instances(sample_size=10)
         
         # Example 3: Get 10 random instances with reproducible seed
-        bug_instances = instance.get_bug_instances(sample_size=10, random_sample=True, random_seed=42)
+        bug_instances = instance.get_bug_instances(sample_size=100, random_sample=True, random_seed=42)
         
         logger.info(f"Retrieved {len(bug_instances)} bug instances")
         # Get dataset token statistics
         token_stats = instance.get_token_statistics()
-        print(token_stats)
+        logger.info(f"Token statistics: {token_stats}")
 
         logger.info(f"Total repo: {len(instance.repos)}")
         responses = {}
