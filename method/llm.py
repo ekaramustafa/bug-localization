@@ -14,8 +14,9 @@ load_dotenv()
 logger = get_logger(__name__)
 
 class LLMClientGenerator:
-    def __init__(self, api_key: str = None, use_openrouter: bool = False, openrouter_api_key: str = None):
+    def __init__(self, api_key: str = None, use_openrouter: bool = False, openrouter_api_key: str = None, use_huggingface: bool = False):
         self.use_openrouter = use_openrouter
+        self.use_huggingface = use_huggingface
         
         # Model name mapping for OpenRouter
         self.model_mapping = {
@@ -24,6 +25,18 @@ class LLMClientGenerator:
             "gpt-4": "openai/gpt-4-turbo",
             "gpt-oss": "openai/gpt-oss-20b:free",
             "openai-free": "openai/gpt-oss-20b:free",
+            "gpt-oss-hf": "openai/gpt-oss-20b",  # For Hugging Face local inference
+            "gpt-oss-120b-hf": "openai/gpt-oss-120b",  # For Hugging Face local inference
+        }
+        
+        # Hugging Face model mapping
+        self.hf_model_mapping = {
+            "gpt-oss": "openai/gpt-oss-20b",
+            "gpt-oss-120b": "openai/gpt-oss-120b", 
+            "openai-free": "openai/gpt-oss-20b",
+            "gpt-oss-20b": "openai/gpt-oss-20b",
+            "gpt-oss-hf": "openai/gpt-oss-20b",
+            "gpt-oss-120b-hf": "openai/gpt-oss-120b",
         }
         
         if self.use_openrouter:
