@@ -16,12 +16,13 @@ class PromptGenerator:
         
         prompt = f"""
         You are a bug localization expert. Given a bug report and a list of Python files in a repository, 
-        your task is to identify which files are most likely related to the reported bug.
+        your task is to identify which files are most likely related to the reported bug. You will
+        return 10 files that are most likely related to the reported bug.
 
         Instructions:
         - Analyze the bug description.
         - Consider the file names and their potential relevance.
-        - Return a ranked list of Python files based on the probability that they contain the bug.
+        - Return a ranked list of 10 Python files based on the probability that they contain the bug.
         - If you're analyzing a chunk of files, focus only on the files provided in this chunk.
 
         Bug Report:
@@ -29,7 +30,10 @@ class PromptGenerator:
         Instance ID: {bug.instance_id}
         Base Commit: {bug.base_commit}
         Hints: {bug.hints_text}
-        Bug Report: {bug.bug_report}{code_files_text}
+        Bug Report: {bug.bug_report}
+        Code Files:
+        {code_files_text}
+
         """
 
         return prompt

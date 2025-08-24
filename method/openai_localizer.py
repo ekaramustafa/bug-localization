@@ -8,7 +8,9 @@ import os
 from method.prompt import PromptGenerator
 from method.models import OpenAILocalizerResponse
 from method.llm import LLMClientGenerator
-from dataset.utils import get_token_count, chunk_code_files, estimate_prompt_tokens
+from dataset.utils import get_token_count, chunk_code_files, estimate_prompt_tokens, get_logger
+
+logger = get_logger(__name__)
 
 class OpenAILocalizer(BugLocalizationMethod):
     def __init__(self):
@@ -55,7 +57,7 @@ class OpenAILocalizer(BugLocalizationMethod):
         
         else:
             # Need chunking - split code files and process each chunk
-            print(f"Code files require chunking: {code_files_tokens} tokens > {max_chunk_tokens} limit")
+            logger.info(f"Code files require chunking: {code_files_tokens} tokens > {max_chunk_tokens} limit")
             
             # Split code files into manageable chunks
             chunks = chunk_code_files(bug.code_files, max_chunk_tokens, model)
@@ -64,13 +66,13 @@ class OpenAILocalizer(BugLocalizationMethod):
             
             # Process each chunk
             for i, chunk in enumerate(chunks):
-                print(f"Processing chunk {i+1}/{len(chunks)} with {len(chunk)} files...")
+                logger.info(f"Processing chunk {i+1}/{len(chunks)} with {len(chunk)} files...")
                 
                 # Estimate total prompt tokens for this chunk
                 estimated_tokens = estimate_prompt_tokens(bug, chunk, model)
                 
                 if estimated_tokens > max_prompt_tokens:
-                    print(f"Warning: Chunk {i+1} estimated at {estimated_tokens} tokens, may exceed model limits")
+                    logger.warning(f"Chunk {i+1} estimated at {estimated_tokens} tokens, may exceed model limits")
                 
                 # Generate prompt for this chunk
                 chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
@@ -85,7 +87,7 @@ class OpenAILocalizer(BugLocalizationMethod):
                     chunk_responses.append(chunk_response)
                     
                 except Exception as e:
-                    print(f"Error processing chunk {i+1}: {e}")
+                    logger.error(f"Error processing chunk {i+1}: {e}")
                     # Continue with other chunks
                     continue
             
@@ -99,7 +101,7 @@ class OpenAILocalizer(BugLocalizationMethod):
             
             # If no chunks were successfully processed, fall back to original approach
             else:
-                print("Warning: All chunks failed, falling back to original approach")
+                logger.warning("All chunks failed, falling back to original approach")
                 prompt = self.prompt_generator.generate_openai_prompt(bug)
                 return self.llm.invoke_structured(
                     prompt=prompt,
@@ -116,7 +118,7 @@ class OpenAILocalizer(BugLocalizationMethod):
             chunk_responses: List of OpenAILocalizerResponse objects
             model: Model name
         """
-        print(f"Aggregating {len(chunk_responses)} chunk responses...")
+        logger.info(f"Aggregating {len(chunk_responses)} chunk responses...")
         
         # Convert structured responses to text for aggregation
         response_texts = []
@@ -139,6 +141,6 @@ class OpenAILocalizer(BugLocalizationMethod):
             return final_response
             
         except Exception as e:
-            print(f"Error during aggregation: {e}")
+            logger.error(f"Error during aggregation: {e}")
             # Fall back to the first successful chunk response
             return chunk_responses[0]
