@@ -12,68 +12,66 @@ import json
 import re
 from typing import Optional, Union
 
-# Import Hugging Face libraries
+# Import Unsloth libraries
+# Unsloth provides optimized fine-tuning and inference for LLMs with significant memory savings
 try:
-    from transformers import (
-        AutoTokenizer, 
-        AutoModelForCausalLM, 
-        pipeline,
-        TextGenerationPipeline
-    )
+    import unsloth
+    from unsloth import FastLanguageModel
+    from transformers import TextStreamer
     import torch
-    HF_AVAILABLE = True
+    UNSLOTH_AVAILABLE = True
 except ImportError:
     # Create dummy classes to avoid NameError
-    AutoTokenizer = None
-    AutoModelForCausalLM = None
-    pipeline = None
-    TextGenerationPipeline = None
+    FastLanguageModel = None
+    TextStreamer = None
     torch = None
-    HF_AVAILABLE = False
+    UNSLOTH_AVAILABLE = False
 
 logger = get_logger(__name__)
 
-class HuggingFaceLocalizer(BugLocalizationMethod):
+class OpenSourceLocalizer(BugLocalizationMethod):
     def __init__(self, 
                  model="gpt-oss", 
                  device=None,
-                 max_length=4096,
-                 temperature=0.7,
-                 do_sample=True):
+                 max_seq_length=1024,
+                 max_new_tokens=256,
+                 dtype=None,
+                 load_in_4bit=True):
         """
-        Initialize HuggingFace localizer for local inference only.
+        Initialize Unsloth-based localizer for optimized local inference.
         
         Args:
             model (str): Model name/type (e.g., "gpt-oss", "openai-free")
             device (str): Device for local inference ("cuda", "cpu", or None for auto)
-            max_length (int): Maximum generation length for local inference
-            temperature (float): Sampling temperature for local inference
-            do_sample (bool): Whether to use sampling for local inference
+            max_seq_length (int): Maximum sequence length for model context
+            max_new_tokens (int): Maximum new tokens to generate
+            dtype: Data type (None for auto detection)
+            load_in_4bit (bool): Whether to use 4-bit quantization for memory efficiency
         """
         super().__init__()
         load_dotenv()
         
         self.model = model
-        self.max_length = max_length
-        self.temperature = temperature
-        self.do_sample = do_sample
+        self.max_seq_length = max_seq_length
+        self.max_new_tokens = max_new_tokens
+        self.dtype = dtype
+        self.load_in_4bit = load_in_4bit
         
-        # Model mapping for Hugging Face
-        self.hf_model_mapping = {
-            "gpt-oss": "openai/gpt-oss-20b",
-            "gpt-oss-120b": "openai/gpt-oss-120b", 
-            "openai-free": "openai/gpt-oss-20b",
-            "gpt-oss-20b": "openai/gpt-oss-20b",
-            # Fallback options for when GPT-OSS is not available
-            "llama3": "meta-llama/Llama-3.2-11B-Vision-Instruct",
-            "codellama": "codellama/CodeLlama-13b-Instruct-hf",
-            "mistral": "mistralai/Mistral-7B-Instruct-v0.3",
+        # Model mapping for Unsloth (4bit pre-quantized models for faster downloading and no OOMs)
+        self.unsloth_model_mapping = {
+            "gpt-oss": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
+            "gpt-oss-120b": "unsloth/gpt-oss-120b-unsloth-bnb-4bit", 
+            "openai-free": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
+            "gpt-oss-20b": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
+            "gpt-oss-20b-mxfp4": "unsloth/gpt-oss-20b",
+            "gpt-oss-120b-mxfp4": "unsloth/gpt-oss-120b",  
+            "qwen3_6b": "unsloth/Qwen3-0.6B-unsloth-bnb-4bit"
         }
         
         # Initialize components
         self.prompt_generator = PromptGenerator()
-        self.local_pipeline = None
-        self.local_tokenizer = None
+        self.unsloth_model = None
+        self.unsloth_tokenizer = None
         
         # Set up device
         if device is None:
@@ -81,115 +79,125 @@ class HuggingFaceLocalizer(BugLocalizationMethod):
         else:
             self.device = device
             
-        logger.info(f"HuggingFace localizer initialized: device={self.device}, model={self.model}")
+        logger.info(f"Unsloth localizer initialized: device={self.device}, model={self.model}")
         
-        # Check if HuggingFace is available
-        if not HF_AVAILABLE:
+        # Check if Unsloth is available
+        if not UNSLOTH_AVAILABLE:
             raise ImportError(
-                "HuggingFace transformers not available. Install with: "
-                "pip install transformers torch accelerate bitsandbytes"
+                "Unsloth not available. Install with: "
+                "pip install unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
             )
         
         # Initialize local model
         try:
-            self._initialize_local_model()
-            logger.info("Local model initialized successfully")
+            self._initialize_unsloth_model()
+            logger.info("Unsloth model initialized successfully")
         except Exception as e:
-            logger.error(f"Failed to initialize local model: {e}")
-            logger.error("HuggingFace localizer requires a working local model setup")
+            logger.error(f"Failed to initialize Unsloth model: {e}")
+            logger.error("Unsloth localizer requires a working local model setup")
             raise e
 
-    def _initialize_local_model(self):
-        """Initialize the local Hugging Face model."""
-        if not HF_AVAILABLE:
-            raise ImportError("Hugging Face transformers not available. Install with: pip install transformers torch")
+    def _initialize_unsloth_model(self):
+        """Initialize the Unsloth model for optimized inference."""
+        if not UNSLOTH_AVAILABLE:
+            raise ImportError("Unsloth not available. Install with: pip install unsloth")
         
-        model_name = self._get_hf_model_name(self.model)
-        logger.info(f"Loading local model: {model_name}")
+        model_name = self._get_unsloth_model_name(self.model)
+        logger.info(f"Loading Unsloth model: {model_name}")
         
         try:
-            # Load tokenizer
-            self.local_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            
-            # Set pad token if not present
-            if self.local_tokenizer.pad_token is None:
-                self.local_tokenizer.pad_token = self.local_tokenizer.eos_token
-            
-            # Load model with appropriate settings
-            model_kwargs = {
-                "torch_dtype": torch.float16 if self.device == "cuda" else torch.float32,
-                "device_map": "auto" if self.device == "cuda" else None,
-            }
-            
-            # For larger models, use additional optimization
-            if "120b" in model_name.lower():
-                model_kwargs["low_cpu_mem_usage"] = True
-                model_kwargs["load_in_8bit"] = True  # Use 8-bit quantization for large models
-            
-            model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
-            
-            # Create pipeline
-            self.local_pipeline = pipeline(
-                "text-generation",
-                model=model,
-                tokenizer=self.local_tokenizer,
-                device=0 if self.device == "cuda" else -1,
-                framework="pt"
+            # Load model and tokenizer using Unsloth's FastLanguageModel
+            self.unsloth_model, self.unsloth_tokenizer = FastLanguageModel.from_pretrained(
+                model_name=model_name,
+                dtype=self.dtype,  # None for auto detection
+                max_seq_length=self.max_seq_length,
+                load_in_4bit=self.load_in_4bit,  # Use 4-bit quantization for memory efficiency
+                full_finetuning=False,  # We're doing inference, not full finetuning
             )
             
-            logger.info(f"Successfully loaded local model: {model_name}")
+            # Get PEFT model for optimized inference
+            self.unsloth_model = FastLanguageModel.get_peft_model(
+                self.unsloth_model,
+                r=8,  # LoRA rank
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                               "gate_proj", "up_proj", "down_proj"],
+                lora_alpha=16,
+                lora_dropout=0,  # 0 is optimized
+                bias="none",  # "none" is optimized
+                use_gradient_checkpointing="unsloth",  # Use Unsloth's optimized gradient checkpointing
+                random_state=3407,
+                use_rslora=False,
+                loftq_config=None,
+            )
+            
+            logger.info(f"Successfully loaded Unsloth model: {model_name}")
             
         except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {e}")
+            logger.error(f"Failed to load Unsloth model {model_name}: {e}")
             raise e
 
-    def _get_hf_model_name(self, model_type: str) -> str:
-        """Map simplified model names to Hugging Face model names."""
-        return self.hf_model_mapping.get(model_type, model_type)
+    def _get_unsloth_model_name(self, model_type: str) -> str:
+        """Map simplified model names to Unsloth model names."""
+        return self.unsloth_model_mapping.get(model_type, model_type)
 
-    def _generate_with_local_model(self, prompt: str) -> str:
-        """Generate response using local Hugging Face model."""
-        if not self.local_pipeline:
-            raise RuntimeError("Local model not initialized")
+    def _generate_with_unsloth_model(self, prompt: str) -> str:
+        """Generate response using Unsloth model."""
+        if not self.unsloth_model or not self.unsloth_tokenizer:
+            raise RuntimeError("Unsloth model not initialized")
         
         try:
+            # Create messages format for chat template
+            messages = [
+                {"role": "user", "content": prompt},
+            ]
+            
+            # Apply chat template and prepare inputs
+            inputs = self.unsloth_tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                return_dict=True,
+                reasoning_effort="medium",  # Set reasoning effort to medium for balance
+            ).to(self.unsloth_model.device)
+            
             # Generate response
-            outputs = self.local_pipeline(
-                prompt,
-                max_length=self.max_length,
-                temperature=self.temperature,
-                do_sample=self.do_sample,
-                pad_token_id=self.local_tokenizer.eos_token_id,
-                truncation=True,
-                return_full_text=False  # Only return the generated text
+            output = self.unsloth_model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=True,
+                temperature=0.7,
+                pad_token_id=self.unsloth_tokenizer.eos_token_id,
+                eos_token_id=self.unsloth_tokenizer.eos_token_id,
             )
             
-            if outputs and len(outputs) > 0:
-                generated_text = outputs[0]['generated_text']
-                return generated_text.strip()
-            else:
-                raise RuntimeError("No output generated from local model")
+            # Decode the generated text (remove input prompt)
+            generated_text = self.unsloth_tokenizer.decode(
+                output[0][inputs['input_ids'].shape[1]:], 
+                skip_special_tokens=True
+            )
+            
+            return generated_text.strip()
                 
         except Exception as e:
-            logger.error(f"Local generation failed: {e}")
+            logger.error(f"Unsloth generation failed: {e}")
             raise e
 
-    def _generate_structured_with_local_model(self, prompt: str, text_format) -> OpenAILocalizerResponse:
-        """Generate structured response using local model."""
+    def _generate_structured_with_unsloth_model(self, prompt: str, text_format) -> OpenAILocalizerResponse:
+        """Generate structured response using Unsloth model."""
         # Create structured prompt
         schema = text_format.model_json_schema()
         schema_description = json.dumps(schema, indent=2)
         
         structured_prompt = f"""{prompt}
 
-Please respond with a valid JSON object that matches this exact schema:
-{schema_description}
+        Please respond with a valid JSON object that matches this exact schema:
+        {schema_description}
 
-Respond ONLY with the JSON object, no additional text."""
+        Respond ONLY with the JSON object, no additional text."""
 
         try:
             # Generate response
-            response_text = self._generate_with_local_model(structured_prompt)
+            response_text = self._generate_with_unsloth_model(structured_prompt)
             
             # Clean and parse JSON
             response_text = response_text.strip()
@@ -206,41 +214,41 @@ Respond ONLY with the JSON object, no additional text."""
                 response_data = json.loads(json_text)
                 return text_format(**response_data)
             except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Failed to parse JSON from local model: {e}")
+                logger.warning(f"Failed to parse JSON from Unsloth model: {e}")
                 logger.warning(f"Raw response: {response_text}")
                 raise e
                 
         except Exception as e:
-            logger.error(f"Structured generation failed with local model: {e}")
+            logger.error(f"Structured generation failed with Unsloth model: {e}")
             raise e
 
     def invoke(self, prompt: str, model_type: Optional[str] = None) -> str:
-        """Generate text response using local model only."""
+        """Generate text response using Unsloth model only."""
         model_type = model_type or self.model
         
         try:
-            return self._generate_with_local_model(prompt)
+            return self._generate_with_unsloth_model(prompt)
         except Exception as e:
-            logger.error(f"Local generation failed: {e}")
-            logger.error("HuggingFace localizer only supports local inference")
+            logger.error(f"Unsloth generation failed: {e}")
+            logger.error("Unsloth localizer only supports local inference")
             logger.error("Consider using OpenAIFreeLocalizer for remote inference fallback")
-            raise RuntimeError(f"Local model generation failed: {e}")
+            raise RuntimeError(f"Unsloth model generation failed: {e}")
 
     def invoke_structured(self, prompt: str, text_format, model: Optional[str] = None) -> OpenAILocalizerResponse:
-        """Generate structured response using local model only."""
+        """Generate structured response using Unsloth model only."""
         model = model or self.model
         
         try:
-            return self._generate_structured_with_local_model(prompt, text_format)
+            return self._generate_structured_with_unsloth_model(prompt, text_format)
         except Exception as e:
-            logger.error(f"Local structured generation failed: {e}")
-            logger.error("HuggingFace localizer only supports local inference")
+            logger.error(f"Unsloth structured generation failed: {e}")
+            logger.error("Unsloth localizer only supports local inference")
             logger.error("Consider using OpenAIFreeLocalizer for remote inference fallback")
-            raise RuntimeError(f"Local structured generation failed: {e}")
+            raise RuntimeError(f"Unsloth structured generation failed: {e}")
 
     def localize(self, bug, max_prompt_tokens=120000, max_chunk_tokens=60000):
         """
-        Localize bugs using local inference only.
+        Localize bugs using Unsloth optimized local inference.
         
         Args:
             bug: BugInstance object
@@ -356,14 +364,14 @@ Respond ONLY with the JSON object, no additional text."""
             return chunk_responses[0]
 
     def cleanup(self):
-        """Clean up resources."""
-        if self.local_pipeline is not None:
+        """Clean up Unsloth model resources."""
+        if self.unsloth_model is not None:
             # Clean up GPU memory
-            del self.local_pipeline
-            del self.local_tokenizer
+            del self.unsloth_model
+            del self.unsloth_tokenizer
             if torch and torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            logger.info("Cleaned up local model resources")
+            logger.info("Cleaned up Unsloth model resources")
 
     def __del__(self):
         """Cleanup on deletion."""
