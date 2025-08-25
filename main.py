@@ -2,7 +2,7 @@ from dataset.swebench import SWEBench
 from dataset.beetlebox import BeetleBox
 from method.openai_localizer import OpenAILocalizer
 from method.openai_free_localizer import OpenAIFreeLocalizer
-from method.huggingface_localizer import HuggingFaceLocalizer
+from method.huggingface_localizer import OpenSourceLocalizer
 from dataset.utils import setup_logging, get_logger
 import logging
 from method.evaluate import Evaluator
@@ -44,7 +44,7 @@ def main():
             localizer = OpenAIFreeLocalizer(model=args.model)
         elif args.method == 'huggingface':
             device = None if args.device == 'auto' else args.device
-            localizer = HuggingFaceLocalizer(
+            localizer = OpenSourceLocalizer(
                 model=args.model,
                 device=device
             )
