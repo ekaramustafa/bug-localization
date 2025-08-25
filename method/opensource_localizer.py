@@ -16,13 +16,14 @@ from typing import Optional, Union
 # Unsloth provides optimized fine-tuning and inference for LLMs with significant memory savings
 try:
     import unsloth
-    from unsloth import FastLanguageModel
+    from unsloth import FastLanguageModel, FastModel
     from transformers import TextStreamer
     import torch
     UNSLOTH_AVAILABLE = True
 except ImportError:
     # Create dummy classes to avoid NameError
     FastLanguageModel = None
+    FastModel = None
     TextStreamer = None
     torch = None
     UNSLOTH_AVAILABLE = False
@@ -72,6 +73,9 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         self.prompt_generator = PromptGenerator()
         self.unsloth_model = None
         self.unsloth_tokenizer = None
+        # Separate model for structured output extraction using Qwen
+        self.extractor_model = None
+        self.extractor_tokenizer = None
         
         # Set up device
         if device is None:
@@ -96,6 +100,15 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.error(f"Failed to initialize Unsloth model: {e}")
             logger.error("Unsloth localizer requires a working local model setup")
             raise e
+            
+        # Initialize Qwen extractor model for structured output
+        try:
+            self._initialize_qwen_extractor()
+            logger.info("Qwen extractor model initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize Qwen extractor model: {e}")
+            logger.warning("Structured output may be less reliable without Qwen extractor")
+            # Don't raise error here, allow main model to work even if extractor fails
 
     def _initialize_unsloth_model(self):
         """Initialize the Unsloth model for optimized inference."""
@@ -134,6 +147,30 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             
         except Exception as e:
             logger.error(f"Failed to load Unsloth model {model_name}: {e}")
+            raise e
+
+    def _initialize_qwen_extractor(self):
+        """Initialize the Qwen model for structured output extraction."""
+        if not UNSLOTH_AVAILABLE:
+            raise ImportError("Unsloth not available for Qwen extractor")
+        
+        qwen_model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit"
+        logger.info(f"Loading Qwen extractor model: {qwen_model_name}")
+        
+        try:
+            # Load Qwen model using FastModel for structured output extraction
+            self.extractor_model, self.extractor_tokenizer = FastModel.from_pretrained(
+                model_name=qwen_model_name,
+                max_seq_length=2048,  # Choose any for long context
+                load_in_4bit=True,   # 4 bit quantization to reduce memory
+                load_in_8bit=False,  # A bit more accurate, uses 2x memory
+                full_finetuning=False,  # We don't need full finetuning
+            )
+            
+            logger.info(f"Successfully loaded Qwen extractor model: {qwen_model_name}")
+            
+        except Exception as e:
+            logger.error(f"Failed to load Qwen extractor model {qwen_model_name}: {e}")
             raise e
 
     def _get_unsloth_model_name(self, model_type: str) -> str:
@@ -182,41 +219,116 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.error(f"Unsloth generation failed: {e}")
             raise e
 
-    def _generate_structured_with_unsloth_model(self, prompt: str, text_format) -> OpenAILocalizerResponse:
-        """Generate structured response using Unsloth model."""
-        # Create structured prompt
-        schema = text_format.model_json_schema()
-        schema_description = json.dumps(schema, indent=2)
+    def _extract_structured_output_with_qwen(self, decoded_text: str, json_schema: str) -> str:
+        """Extract structured JSON output using Qwen model."""
+        if not self.extractor_model or not self.extractor_tokenizer:
+            logger.warning("Qwen extractor not available, falling back to regex extraction")
+            return decoded_text
         
-        structured_prompt = f"""{prompt}
-
-        Please respond with a valid JSON object that matches this exact schema:
-        {schema_description}
-
-        Respond ONLY with the JSON object, no additional text."""
-
         try:
-            # Generate response
-            response_text = self._generate_with_unsloth_model(structured_prompt)
+            # Create message for Qwen extractor
+            messages = [
+                {"role": "user", 
+                 "content": f"""
+                 You will receive messages from another language model that already produced the answer 
+                 Your task is to construct JSON without any explanation or extra output using the answer by other LLM and JSON schema
+
+                 JSON Schema:
+                {json_schema}
+
+                 Answer by other LLM: 
+                 {decoded_text}
+                 
+                 """}
+            ]
+
+            # Apply chat template
+            text = self.extractor_tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,  # Must add for generation
+            )
+
+            # Generate structured output
+            final_output = self.extractor_model.generate(
+                **self.extractor_tokenizer(text, return_tensors="pt").to(self.extractor_model.device),
+                max_new_tokens=1000,  # Increase for longer outputs
+                temperature=0.7, 
+                top_p=0.8, 
+                top_k=20,  # For non thinking
+                pad_token_id=self.extractor_tokenizer.eos_token_id,
+                eos_token_id=self.extractor_tokenizer.eos_token_id,
+            )
+
+            # Decode the response
+            answer = self.extractor_tokenizer.decode(final_output[0], skip_special_tokens=True)
+            
+            # Extract content after </think> tags if present
+            if "</think>" in answer:
+                answer = answer.split("</think>")[-1].strip()
+            
+            # Remove the input prompt from the answer
+            if text in answer:
+                answer = answer.replace(text, "").strip()
+            
+            return answer
+            
+        except Exception as e:
+            logger.error(f"Qwen extraction failed: {e}")
+            logger.warning("Falling back to original text")
+            return decoded_text
+
+    def _generate_structured_with_unsloth_model(self, prompt: str, text_format) -> OpenAILocalizerResponse:
+        """Generate structured response using two-step process: Unsloth + Qwen extraction."""
+        try:
+            # Step 1: Generate response with main Unsloth model (no strict formatting requirements)
+            response_text = self._generate_with_unsloth_model(prompt)
+            logger.info("Generated initial response with Unsloth model")
+            
+            # Step 2: Extract structured JSON using Qwen extractor
+            schema = text_format.model_json_schema()
+            schema_description = json.dumps(schema, indent=2)
+            
+            # Use Qwen to extract structured output
+            extracted_json = self._extract_structured_output_with_qwen(response_text, schema_description)
             
             # Clean and parse JSON
-            response_text = response_text.strip()
+            extracted_json = extracted_json.strip()
             
             # Try to extract JSON from response
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+            json_match = re.search(r'\{.*\}', extracted_json, re.DOTALL)
             if json_match:
                 json_text = json_match.group(0)
             else:
-                json_text = response_text
+                json_text = extracted_json
             
             # Parse and validate
             try:
                 response_data = json.loads(json_text)
-                return text_format(**response_data)
+                result = text_format(**response_data)
+                logger.info("Successfully extracted structured output using Qwen")
+                return result
             except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Failed to parse JSON from Unsloth model: {e}")
-                logger.warning(f"Raw response: {response_text}")
-                raise e
+                logger.warning(f"Failed to parse JSON from Qwen extractor: {e}")
+                logger.warning(f"Extracted JSON: {extracted_json}")
+                
+                # Fallback: try to parse original response directly
+                logger.info("Attempting fallback JSON extraction from original response")
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    fallback_json = json_match.group(0)
+                    try:
+                        response_data = json.loads(fallback_json)
+                        return text_format(**response_data)
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                
+                # Final fallback: create a basic response structure
+                logger.warning("Creating fallback response structure")
+                return text_format(
+                    files=[],
+                    reasoning=f"Raw model response: {response_text[:500]}..."
+                )
                 
         except Exception as e:
             logger.error(f"Structured generation failed with Unsloth model: {e}")
@@ -366,12 +478,20 @@ class OpenSourceLocalizer(BugLocalizationMethod):
     def cleanup(self):
         """Clean up Unsloth model resources."""
         if self.unsloth_model is not None:
-            # Clean up GPU memory
+            # Clean up main model GPU memory
             del self.unsloth_model
             del self.unsloth_tokenizer
-            if torch and torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            logger.info("Cleaned up Unsloth model resources")
+            logger.info("Cleaned up Unsloth main model resources")
+            
+        if self.extractor_model is not None:
+            # Clean up extractor model GPU memory
+            del self.extractor_model
+            del self.extractor_tokenizer
+            logger.info("Cleaned up Qwen extractor model resources")
+            
+        if torch and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.info("Cleared CUDA cache")
 
     def __del__(self):
         """Cleanup on deletion."""
