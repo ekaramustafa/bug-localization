@@ -190,10 +190,10 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         
         structured_prompt = f"""{prompt}
 
-Please respond with a valid JSON object that matches this exact schema:
-{schema_description}
+        Please respond with a valid JSON object that matches this exact schema:
+        {schema_description}
 
-Respond ONLY with the JSON object, no additional text."""
+        Respond ONLY with the JSON object, no additional text."""
 
         try:
             # Generate response

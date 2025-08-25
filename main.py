@@ -2,7 +2,7 @@ from dataset.swebench import SWEBench
 from dataset.beetlebox import BeetleBox
 from method.openai_localizer import OpenAILocalizer
 from method.openai_free_localizer import OpenAIFreeLocalizer
-from method.huggingface_localizer import OpenSourceLocalizer
+from method.opensource_localizer import OpenSourceLocalizer
 from dataset.utils import setup_logging, get_logger
 import logging
 from method.evaluate import Evaluator
@@ -14,7 +14,7 @@ logger = get_logger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description='Bug Localization Tool')
-    parser.add_argument('--method', choices=['openai', 'openai-free', 'huggingface'], 
+    parser.add_argument('--method', choices=['openai', 'openai-free', 'unsloth'], 
                        default='openai-free', help='Localization method to use')
     parser.add_argument('--dataset', choices=['swebench', 'beetlebox'], 
                        default='beetlebox', help='Dataset to use')
@@ -42,7 +42,7 @@ def main():
             localizer = OpenAILocalizer()
         elif args.method == 'openai-free':
             localizer = OpenAIFreeLocalizer(model=args.model)
-        elif args.method == 'huggingface':
+        elif args.method == 'unsloth':
             device = None if args.device == 'auto' else args.device
             localizer = OpenSourceLocalizer(
                 model=args.model,
@@ -76,13 +76,13 @@ def main():
         results = evaluator.evaluate(responses)
         logger.info(f"Results: {results}")
         
-        # Cleanup if using HuggingFace localizer
+        # Cleanup if using Unsloth localizer
         if hasattr(localizer, 'cleanup'):
             localizer.cleanup()
             
     except Exception as e:
         logger.error(f"Error in main execution: {e}", exc_info=True)
-        # Cleanup on error if using HuggingFace localizer
+        # Cleanup on error if using Unsloth localizer
         if 'localizer' in locals() and hasattr(localizer, 'cleanup'):
             localizer.cleanup()
         raise
