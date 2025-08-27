@@ -34,7 +34,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
     def __init__(self, 
                  model="gpt-oss", 
                  device=None,
-                 max_seq_length=1024,
+                 max_seq_length=131072,  # Increased to 128K to match other localizers
                  max_new_tokens=256,
                  dtype=None,
                  load_in_4bit=True):
@@ -161,7 +161,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             # Load Qwen model using FastModel for structured output extraction
             self.extractor_model, self.extractor_tokenizer = FastModel.from_pretrained(
                 model_name=qwen_model_name,
-                max_seq_length=2048,  # Choose any for long context
+                max_seq_length=32768,  # Increased for larger structured outputs
                 load_in_4bit=True,   # 4 bit quantization to reduce memory
                 load_in_8bit=False,  # A bit more accurate, uses 2x memory
                 full_finetuning=False,  # We don't need full finetuning
@@ -326,8 +326,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
                 # Final fallback: create a basic response structure
                 logger.warning("Creating fallback response structure")
                 return text_format(
-                    files=[],
-                    reasoning=f"Raw model response: {response_text[:500]}..."
+                    candidate_files=[]
                 )
                 
         except Exception as e:
@@ -358,7 +357,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.error("Consider using OpenAIFreeLocalizer for remote inference fallback")
             raise RuntimeError(f"Unsloth structured generation failed: {e}")
 
-    def localize(self, bug, max_prompt_tokens=120000, max_chunk_tokens=60000):
+    def localize(self, bug, max_prompt_tokens=120000, max_chunk_tokens=30000):
         """
         Localize bugs using Unsloth optimized local inference.
         
@@ -408,8 +407,14 @@ class OpenSourceLocalizer(BugLocalizationMethod):
                 # Estimate total prompt tokens for this chunk
                 estimated_tokens = estimate_prompt_tokens(bug, chunk, "gpt-4o")
                 
+                # Check if chunk exceeds model's actual context window (conservative estimate)
+                max_model_tokens = self.max_seq_length - self.max_new_tokens - 1000  # Buffer for safety
+                if estimated_tokens > max_model_tokens:
+                    logger.warning(f"Chunk {i+1} estimated at {estimated_tokens} tokens exceeds model limit of {max_model_tokens}, skipping...")
+                    continue
+                
                 if estimated_tokens > max_prompt_tokens:
-                    logger.warning(f"Chunk {i+1} estimated at {estimated_tokens} tokens, may exceed model limits")
+                    logger.warning(f"Chunk {i+1} estimated at {estimated_tokens} tokens, may exceed configured limits")
                 
                 # Generate prompt for this chunk
                 chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
@@ -436,15 +441,38 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             elif len(chunk_responses) > 1:
                 return self._aggregate_chunk_responses(bug, chunk_responses)
             
-            # If no chunks were successfully processed, fall back to original approach
+            # If no chunks were successfully processed, try with even smaller chunks or give up gracefully
             else:
-                logger.warning("All chunks failed, falling back to original approach")
-                prompt = self.prompt_generator.generate_openai_prompt(bug)
-                return self.invoke_structured(
-                    prompt=prompt,
-                    text_format=OpenAILocalizerResponse,
-                    model=self.model
-                )
+                logger.warning("All chunks failed. Trying with smaller chunk size...")
+                
+                # Try with much smaller chunks (quarter size)
+                smaller_chunk_tokens = max_chunk_tokens // 4
+                logger.info(f"Retrying with smaller chunks: {smaller_chunk_tokens} tokens")
+                
+                try:
+                    smaller_chunks = chunk_code_files(bug.code_files, smaller_chunk_tokens, "gpt-4o")
+                    
+                    for i, chunk in enumerate(smaller_chunks[:3]):  # Only try first 3 small chunks
+                        estimated_tokens = estimate_prompt_tokens(bug, chunk, "gpt-4o")
+                        max_model_tokens = self.max_seq_length - self.max_new_tokens - 1000
+                        
+                        if estimated_tokens <= max_model_tokens:
+                            logger.info(f"Trying smaller chunk {i+1} with {estimated_tokens} tokens")
+                            chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
+                            return self.invoke_structured(
+                                prompt=chunk_prompt,
+                                text_format=OpenAILocalizerResponse,
+                                model=self.model
+                            )
+                    
+                    # If even small chunks fail, create minimal response
+                    logger.error("Even smaller chunks exceed model limits. Creating minimal response.")
+                    return OpenAILocalizerResponse(candidate_files=[])
+                    
+                except Exception as e:
+                    logger.error(f"Fallback with smaller chunks failed: {e}")
+                    # Final fallback: return empty response rather than crashing
+                    return OpenAILocalizerResponse(candidate_files=[])
     
     def _aggregate_chunk_responses(self, bug, chunk_responses):
         """Aggregate multiple chunk responses into a single response."""
@@ -454,8 +482,8 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         response_texts = []
         for i, response in enumerate(chunk_responses):
             # Convert structured response to text representation
-            response_text = f"Files analyzed: {getattr(response, 'files', 'N/A')}\n"
-            response_text += f"Reasoning: {getattr(response, 'reasoning', 'N/A')}"
+            response_text = f"Files analyzed: {getattr(response, 'candidate_files', 'N/A')}\n"
+            response_text += f"Additional info: {str(response)}"
             response_texts.append(response_text)
         
         # Generate aggregation prompt
