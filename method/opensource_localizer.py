@@ -227,6 +227,20 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             return decoded_text
         
         try:
+            prompt = f"""
+                 You will receive messages from another language model that already produced the answer 
+                 Your task is to construct JSON without any explanation or extra output using the answer by other LLM and JSON schema
+
+                 JSON Schema:
+                {json_schema}
+
+                 Answer by other LLM: 
+                 {decoded_text}
+                 
+                 """
+            structured_output = self._generate_with_unsloth_model(prompt)
+            return structured_output
+            # 
             # Create message for Qwen extractor
             messages = [
                 {"role": "user", 
@@ -301,16 +315,16 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             
             # Use Qwen to extract structured output
             extracted_json = self._extract_structured_output_with_qwen(response_text, schema_description)
-            
+            json_text = json.dumps(extracted_json)
             # Clean and parse JSON
-            extracted_json = extracted_json.strip()
+            # extracted_json = extracted_json.strip()
             
             # Try to extract JSON from response
-            json_match = re.search(r'\{.*\}', extracted_json, re.DOTALL)
-            if json_match:
-                json_text = json_match.group(0)
-            else:
-                json_text = extracted_json
+            # json_match = re.search(r'\{.*\}', extracted_json, re.DOTALL)
+            # if json_match:
+                # json_text = json_match.group(0)
+            # else:
+                # json_text = extracted_json
             
             # Parse and validate
             try:
