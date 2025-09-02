@@ -251,14 +251,21 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             )
 
             # Generate structured output
+            inputs = self.unsloth_tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                return_dict=True,
+                reasoning_effort="medium",  # Set reasoning effort to medium for balance
+            ).to(self.unsloth_model.device)
+            
             final_output = self.extractor_model.generate(
                 **self.extractor_tokenizer(text, return_tensors="pt").to(self.extractor_model.device),
-                max_new_tokens=1000,  # Increase for longer outputs
-                temperature=0.7, 
-                top_p=0.8, 
-                top_k=20,  # For non thinking
-                pad_token_id=self.extractor_tokenizer.eos_token_id,
-                eos_token_id=self.extractor_tokenizer.eos_token_id,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=True,
+                temperature=0.7,
+                pad_token_id=self.unsloth_tokenizer.eos_token_id,
+                eos_token_id=self.unsloth_tokenizer.eos_token_id,
             )
 
             # Decode the response
