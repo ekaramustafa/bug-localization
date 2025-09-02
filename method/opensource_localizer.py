@@ -155,7 +155,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         if not UNSLOTH_AVAILABLE:
             raise ImportError("Unsloth not available for Qwen extractor")
         
-        qwen_model_name = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit"
+        qwen_model_name = "unsloth/Qwen3-1.4B-unsloth-bnb-4bit"
         logger.info(f"Loading Qwen extractor model: {qwen_model_name}")
         
         try:
@@ -251,25 +251,26 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             )
 
             # Generate structured output
-            inputs = self.unsloth_tokenizer.apply_chat_template(
+            inputs = self.extractor_tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
                 return_tensors="pt",
-                return_dict=True,
-                reasoning_effort="medium",  # Set reasoning effort to medium for balance
-            ).to(self.unsloth_model.device)
+            ).to(self.extractor_model.device)
             
             final_output = self.extractor_model.generate(
-                **self.extractor_tokenizer(text, return_tensors="pt").to(self.extractor_model.device),
+                **inputs,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=True,
                 temperature=0.7,
-                pad_token_id=self.unsloth_tokenizer.eos_token_id,
-                eos_token_id=self.unsloth_tokenizer.eos_token_id,
+                pad_token_id=self.extractor_tokenizer.eos_token_id,
+                eos_token_id=self.extractor_tokenizer.eos_token_id,
             )
 
             # Decode the response
-            answer = self.extractor_tokenizer.decode(final_output[0], skip_special_tokens=True)
+            answer = self.extractor_tokenizer.decode(
+                final_output[0][inputs['input_ids'].shape[1]:], 
+                skip_special_tokens=True
+            )
             
             # Extract content after </think> tags if present
             if "</think>" in answer:
