@@ -394,9 +394,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         # Check if code files need chunking
         code_files_tokens = get_token_count("\n\n".join(bug.code_files), "gpt-4o")
 
-        # Use a reasonable chunk size that fits within the prompt limits
-        # Leave some room for the bug report and prompt structure
-        max_chunk_tokens = max_prompt_tokens // 2
+        max_chunk_tokens = max_prompt_tokens // 4
 
         if code_files_tokens <= max_chunk_tokens:
             # Try again with potentially summarized bug report
@@ -411,7 +409,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         # Need to chunk code files
         logger.info(f"Chunking code files ({code_files_tokens} tokens > {max_chunk_tokens} limit)")
         chunks = chunk_code_files(bug.code_files, max_chunk_tokens, "gpt-4o")
-        
+    
         chunk_responses = []
         
         # Process each chunk
