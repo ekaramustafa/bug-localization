@@ -162,10 +162,10 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             # Load Qwen model using FastModel for structured output extraction
             self.extractor_model, self.extractor_tokenizer = FastModel.from_pretrained(
                 model_name=qwen_model_name,
-                max_seq_length=32768,  # Increased for larger structured outputs
-                load_in_4bit=True,   # 4 bit quantization to reduce memory
-                load_in_8bit=False,  # A bit more accurate, uses 2x memory
-                full_finetuning=False,  # We don't need full finetuning
+                max_seq_length=2055,  
+                load_in_4bit=True,   
+                load_in_8bit=False,  
+                full_finetuning=False,
             )
             
             logger.info(f"Successfully loaded Qwen extractor model: {qwen_model_name}")
