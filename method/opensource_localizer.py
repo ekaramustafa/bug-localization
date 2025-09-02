@@ -67,7 +67,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             "gpt-oss-20b-mxfp4": "unsloth/gpt-oss-20b",
             "gpt-oss-120b-mxfp4": "unsloth/gpt-oss-120b",  
             "qwen3_06b": "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
-            "qwen3_1.4b": "unsloth/Qwen3-1.4B-unsloth-bnb-4bit"
+            "qwen3_1.4b": "unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
         }
         
         # Initialize components
@@ -155,7 +155,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         if not UNSLOTH_AVAILABLE:
             raise ImportError("Unsloth not available for Qwen extractor")
         
-        qwen_model_name = "unsloth/Qwen3-1.4B-unsloth-bnb-4bit"
+        qwen_model_name = "unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
         logger.info(f"Loading Qwen extractor model: {qwen_model_name}")
         
         try:
