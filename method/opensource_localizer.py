@@ -250,13 +250,14 @@ class OpenSourceLocalizer(BugLocalizationMethod):
                 add_generation_prompt=True,  # Must add for generation
             )
 
-            # Generate structured output
-            inputs = self.extractor_tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
+            # Tokenize properly to get a dictionary
+            inputs = self.extractor_tokenizer(
+                text,
                 return_tensors="pt",
+                padding=True,
+                truncation=True
             ).to(self.extractor_model.device)
-            
+
             final_output = self.extractor_model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
