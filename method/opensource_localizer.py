@@ -66,7 +66,8 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             "gpt-oss-20b": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
             "gpt-oss-20b-mxfp4": "unsloth/gpt-oss-20b",
             "gpt-oss-120b-mxfp4": "unsloth/gpt-oss-120b",  
-            "qwen3_6b": "unsloth/Qwen3-0.6B-unsloth-bnb-4bit"
+            "qwen3_06b": "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
+            "qwen3_1.4b": "unsloth/Qwen3-1.4B-unsloth-bnb-4bit"
         }
         
         # Initialize components
