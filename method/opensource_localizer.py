@@ -34,8 +34,8 @@ class OpenSourceLocalizer(BugLocalizationMethod):
     def __init__(self, 
                  model="gpt-oss", 
                  device=None,
-                 max_seq_length=131072,  # Increased to 128K to match other localizers
-                 max_new_tokens=256,
+                 max_seq_length=16384, 
+                 max_new_tokens=4096,
                  dtype=None,
                  load_in_4bit=True):
         """
@@ -357,33 +357,49 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.error("Consider using OpenAIFreeLocalizer for remote inference fallback")
             raise RuntimeError(f"Unsloth structured generation failed: {e}")
 
-    def localize(self, bug, max_prompt_tokens=120000, max_chunk_tokens=30000):
+    def localize(self, bug):
         """
         Localize bugs using Unsloth optimized local inference.
         
         Args:
             bug: BugInstance object
-            max_prompt_tokens: Maximum total tokens per prompt
-            max_chunk_tokens: Maximum tokens per code file chunk
         """
         
-        # Count tokens in the bug report using the utility function
-        token_count = get_token_count(bug.bug_report, model="gpt-4o")  # Use gpt-4o for tokenization
-
-        # With large context, we can handle much larger bug reports before summarizing
-        if token_count > max_prompt_tokens:
-            prompt = self.prompt_generator.generate_openai_report_summarizer_prompt(bug)
-            bug_report = self.invoke(prompt, model_type=self.model)
-            # Update the bug object with the summarized report
-            bug.bug_report = bug_report
+        # Calculate available tokens based on model's context size
+        available_input_tokens = self.max_seq_length - self.max_new_tokens - 250
+        max_prompt_tokens = available_input_tokens
+        
+        # Count tokens in the full bug instance
+        full_prompt = self.prompt_generator.generate_openai_prompt(bug)
+        total_tokens = get_token_count(full_prompt, model="gpt-4o")
+        
+        # If prompt fits within limits, process directly
+        if total_tokens <= max_prompt_tokens:
+            logger.info(f"Processing bug directly ({total_tokens} tokens)")
+            response = self.invoke_structured(
+                prompt=full_prompt,
+                text_format=OpenAILocalizerResponse,
+                model=self.model
+            )
+            return response
+        
+        # If bug report is very long, summarize it first
+        # bug_report_tokens = get_token_count(bug.bug_report, model="gpt-4o")
+        # if bug_report_tokens > max_prompt_tokens // 2:
+        #     logger.info(f"Summarizing long bug report ({bug_report_tokens} tokens)")
+        #     summary_prompt = self.prompt_generator.generate_openai_report_summarizer_prompt(bug)
+        #     bug.bug_report = self.invoke(summary_prompt, model_type=self.model)
         
         # Check if code files need chunking
         code_files_tokens = get_token_count("\n\n".join(bug.code_files), "gpt-4o")
-        
+
+        # Use a reasonable chunk size that fits within the prompt limits
+        # Leave some room for the bug report and prompt structure
+        max_chunk_tokens = max_prompt_tokens // 2
+
         if code_files_tokens <= max_chunk_tokens:
-            # No chunking needed - process normally
+            # Try again with potentially summarized bug report
             prompt = self.prompt_generator.generate_openai_prompt(bug)
-            
             response = self.invoke_structured(
                 prompt=prompt,
                 text_format=OpenAILocalizerResponse,
@@ -391,99 +407,68 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             )
             return response
         
+        # Need to chunk code files
+        logger.info(f"Chunking code files ({code_files_tokens} tokens > {max_chunk_tokens} limit)")
+        chunks = chunk_code_files(bug.code_files, max_chunk_tokens, "gpt-4o")
+        
+        chunk_responses = []
+        
+        # Process each chunk
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Processing chunk {i+1}/{len(chunks)} with {len(chunk)} files...")
+            
+            # Generate prompt for this chunk
+            chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
+            
+            # Final safety check
+            chunk_tokens = get_token_count(chunk_prompt, model="gpt-4o")
+            if chunk_tokens > max_prompt_tokens:
+                logger.warning(f"Chunk {i+1} estimated at {chunk_tokens} tokens, may exceed model limits")
+                continue
+            
+            # Get response for this chunk
+            try:
+                chunk_response = self.invoke_structured(
+                    prompt=chunk_prompt,
+                    text_format=OpenAILocalizerResponse,
+                    model=self.model
+                )
+                chunk_responses.append(chunk_response)
+                
+            except Exception as e:
+                logger.error(f"Error processing chunk {i+1}: {e}")
+                # Continue with other chunks
+                continue
+        
+        # If we only have one successful response, return it
+        if len(chunk_responses) == 1:
+            return chunk_responses[0]
+        
+        # If we have multiple responses, aggregate them
+        elif len(chunk_responses) > 1:
+            return self._aggregate_chunk_responses(bug, chunk_responses)
+        
+        # If no chunks were successfully processed, return empty response
         else:
-            # Need chunking - split code files and process each chunk
-            logger.info(f"Code files require chunking: {code_files_tokens} tokens > {max_chunk_tokens} limit")
-            
-            # Split code files into manageable chunks
-            chunks = chunk_code_files(bug.code_files, max_chunk_tokens, "gpt-4o")
-            
-            chunk_responses = []
-            
-            # Process each chunk
-            for i, chunk in enumerate(chunks):
-                logger.info(f"Processing chunk {i+1}/{len(chunks)} with {len(chunk)} files...")
-                
-                # Estimate total prompt tokens for this chunk
-                estimated_tokens = estimate_prompt_tokens(bug, chunk, "gpt-4o")
-                
-                # Check if chunk exceeds model's actual context window (conservative estimate)
-                max_model_tokens = self.max_seq_length - self.max_new_tokens - 1000  # Buffer for safety
-                if estimated_tokens > max_model_tokens:
-                    logger.warning(f"Chunk {i+1} estimated at {estimated_tokens} tokens exceeds model limit of {max_model_tokens}, skipping...")
-                    continue
-                
-                if estimated_tokens > max_prompt_tokens:
-                    logger.warning(f"Chunk {i+1} estimated at {estimated_tokens} tokens, may exceed configured limits")
-                
-                # Generate prompt for this chunk
-                chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
-                
-                # Get response for this chunk
-                try:
-                    chunk_response = self.invoke_structured(
-                        prompt=chunk_prompt,
-                        text_format=OpenAILocalizerResponse,
-                        model=self.model
-                    )
-                    chunk_responses.append(chunk_response)
-                    
-                except Exception as e:
-                    logger.error(f"Error processing chunk {i+1}: {e}")
-                    # Continue with other chunks
-                    continue
-            
-            # If we only have one successful response, return it
-            if len(chunk_responses) == 1:
-                return chunk_responses[0]
-            
-            # If we have multiple responses, aggregate them
-            elif len(chunk_responses) > 1:
-                return self._aggregate_chunk_responses(bug, chunk_responses)
-            
-            # If no chunks were successfully processed, try with even smaller chunks or give up gracefully
-            else:
-                logger.warning("All chunks failed. Trying with smaller chunk size...")
-                
-                # Try with much smaller chunks (quarter size)
-                smaller_chunk_tokens = max_chunk_tokens // 4
-                logger.info(f"Retrying with smaller chunks: {smaller_chunk_tokens} tokens")
-                
-                try:
-                    smaller_chunks = chunk_code_files(bug.code_files, smaller_chunk_tokens, "gpt-4o")
-                    
-                    for i, chunk in enumerate(smaller_chunks[:3]):  # Only try first 3 small chunks
-                        estimated_tokens = estimate_prompt_tokens(bug, chunk, "gpt-4o")
-                        max_model_tokens = self.max_seq_length - self.max_new_tokens - 1000
-                        
-                        if estimated_tokens <= max_model_tokens:
-                            logger.info(f"Trying smaller chunk {i+1} with {estimated_tokens} tokens")
-                            chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
-                            return self.invoke_structured(
-                                prompt=chunk_prompt,
-                                text_format=OpenAILocalizerResponse,
-                                model=self.model
-                            )
-                    
-                    # If even small chunks fail, create minimal response
-                    logger.error("Even smaller chunks exceed model limits. Creating minimal response.")
-                    return OpenAILocalizerResponse(candidate_files=[])
-                    
-                except Exception as e:
-                    logger.error(f"Fallback with smaller chunks failed: {e}")
-                    # Final fallback: return empty response rather than crashing
-                    return OpenAILocalizerResponse(candidate_files=[])
-    
+            logger.warning("All chunks failed, returning empty response")
+            return OpenAILocalizerResponse(candidate_files=[])
+
     def _aggregate_chunk_responses(self, bug, chunk_responses):
-        """Aggregate multiple chunk responses into a single response."""
+        """
+        Aggregate responses from multiple chunks into a final response.
+        
+        Args:
+            bug: BugInstance object
+            chunk_responses: List of OpenAILocalizerResponse objects
+        """
         logger.info(f"Aggregating {len(chunk_responses)} chunk responses...")
         
         # Convert structured responses to text for aggregation
         response_texts = []
         for i, response in enumerate(chunk_responses):
             # Convert structured response to text representation
-            response_text = f"Files analyzed: {getattr(response, 'candidate_files', 'N/A')}\n"
-            response_text += f"Additional info: {str(response)}"
+            response_text = f"Files analyzed: {getattr(response, 'files', 'N/A')}\n"
+            response_text += f"Reasoning: {getattr(response, 'reasoning', 'N/A')}"
             response_texts.append(response_text)
         
         # Generate aggregation prompt
