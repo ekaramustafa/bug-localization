@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from method.base import BugLocalizationMethod
 from method.prompt import PromptGenerator
 from method.models import OpenAILocalizerResponse
-from dataset.utils import get_token_count, chunk_code_files, get_logger
+from dataset.utils import get_token_count, get_logger
 
 try:
     from unsloth import FastLanguageModel
@@ -125,6 +125,109 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.warning(f"Failed to parse JSON: {e}")
             return text_format(candidate_files=[])
 
+    def _scan_directory(self, path):
+        directories = []
+        files = []
+        
+        try:
+            for item in os.listdir(path):
+                item_path = os.path.join(path, item)
+                if os.path.isdir(item_path):
+                    directories.append(item)
+                elif os.path.isfile(item_path):
+                    files.append(item)
+        except:
+            pass
+        
+        return directories, files
+
+    def _select_path(self, bug, current_path, directories, files):
+        options = []
+        if directories:
+            options.extend([f"DIR: {d}" for d in directories[:10]])  # Limit to avoid context overflow
+        if files:
+            options.extend([f"FILE: {f}" for f in files[:20]])
+        
+        prompt = f"""
+Bug: {bug.bug_report[:1000]}
+
+Current path: {current_path}
+Available options:
+{chr(10).join(options)}
+
+Select ONE of:
+1. Directory name to explore (just the name, no "DIR:" prefix)
+2. Comma-separated file names to add as candidates (just names, no "FILE:" prefix)  
+3. "STOP" if no relevant options
+
+Response:"""
+        
+        response = self._generate_text(prompt).strip().upper()
+        
+        if response == "STOP":
+            return None, []
+        
+        if "," in response:
+            # Multiple files selected
+            selected_files = [f.strip() for f in response.split(",")]
+            return None, [f for f in selected_files if f in files]
+        
+        # Single directory or file
+        response_lower = response.lower()
+        
+        for d in directories:
+            if d.lower() == response_lower:
+                return d, []
+        
+        for f in files:
+            if f.lower() == response_lower:
+                return None, [f]
+        
+        return None, []
+
+    def _explore_hierarchy(self, bug, base_path, current_path="", max_depth=5):
+        if max_depth <= 0:
+            return []
+        
+        full_path = os.path.join(base_path, current_path) if current_path else base_path
+        candidate_files = []
+        
+        directories, files = self._scan_directory(full_path)
+        
+        if not directories and not files:
+            return []
+        
+        selected_dir, selected_files = self._select_path(bug, current_path or ".", directories, files)
+        
+        # Add selected files to candidates
+        for file in selected_files:
+            file_path = os.path.join(current_path, file) if current_path else file
+            candidate_files.append(file_path)
+        
+        # Explore selected directory
+        if selected_dir:
+            next_path = os.path.join(current_path, selected_dir) if current_path else selected_dir
+            candidate_files.extend(self._explore_hierarchy(bug, base_path, next_path, max_depth - 1))
+        
+        return candidate_files
+
+    def _get_hierarchical_files(self, bug, code_files):
+        # Extract base path from first code file
+        if not code_files:
+            return []
+        
+        # Find common base directory
+        base_path = os.path.commonpath([os.path.dirname(f) for f in code_files])
+        
+        # Explore hierarchy starting from base path
+        relative_files = self._explore_hierarchy(bug, base_path)
+        
+        # Convert back to full paths
+        full_paths = [os.path.join(base_path, rf) for rf in relative_files]
+        
+        # Filter to only include files that exist in original code_files
+        return [f for f in full_paths if f in code_files]
+
     def localize(self, bug):
         available_tokens = self.max_seq_length - self.max_new_tokens - 250
         
@@ -133,49 +236,25 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         if get_token_count(full_prompt, model="gpt-4o") <= available_tokens:
             return self.invoke_structured(full_prompt, OpenAILocalizerResponse)
         
-        # Check if we need chunking
-        code_files_tokens = get_token_count("\n\n".join(bug.code_files), "gpt-4o")
-        max_chunk_tokens = available_tokens // 4
-
-        if code_files_tokens <= max_chunk_tokens:
-            return self.invoke_structured(full_prompt, OpenAILocalizerResponse)
+        # Use hierarchical approach to select relevant files
+        selected_files = self._get_hierarchical_files(bug, bug.code_files)
         
-        # Process chunks
-        chunks = chunk_code_files(bug.code_files, max_chunk_tokens, "gpt-4o")
-        chunk_responses = []
-        
-        for i, chunk in enumerate(chunks):
-            chunk_prompt = self.prompt_generator.generate_openai_prompt(bug, chunk)
-            
-            if get_token_count(chunk_prompt, model="gpt-4o") > available_tokens:
-                continue
-            
-            try:
-                chunk_responses.append(self.invoke_structured(chunk_prompt, OpenAILocalizerResponse))
-            except Exception as e:
-                logger.error(f"Error processing chunk {i+1}: {e}")
-        
-        # Return results
-        if len(chunk_responses) == 1:
-            return chunk_responses[0]
-        elif len(chunk_responses) > 1:
-            return self._aggregate_responses(bug, chunk_responses)
-        else:
+        if not selected_files:
             return OpenAILocalizerResponse(candidate_files=[])
+        
+        # Create prompt with selected files
+        selected_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files)
+        
+        # If still too large, take first batch that fits
+        if get_token_count(selected_prompt, model="gpt-4o") > available_tokens:
+            for i in range(len(selected_files), 0, -1):
+                subset_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files[:i])
+                if get_token_count(subset_prompt, model="gpt-4o") <= available_tokens:
+                    return self.invoke_structured(subset_prompt, OpenAILocalizerResponse)
+            return OpenAILocalizerResponse(candidate_files=[])
+        
+        return self.invoke_structured(selected_prompt, OpenAILocalizerResponse)
 
-    def _aggregate_responses(self, bug, chunk_responses):
-        response_texts = [
-            f"Files: {getattr(response, 'files', 'N/A')}\nReasoning: {getattr(response, 'reasoning', 'N/A')}"
-            for response in chunk_responses
-        ]
-        
-        aggregation_prompt = self.prompt_generator.generate_chunk_aggregation_prompt(bug, response_texts)
-        
-        try:
-            return self.invoke_structured(aggregation_prompt, OpenAILocalizerResponse)
-        except Exception as e:
-            logger.error(f"Aggregation failed: {e}")
-            return chunk_responses[0]
 
     def cleanup(self):
         if self.unsloth_model is not None:
