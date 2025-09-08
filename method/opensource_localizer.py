@@ -1,5 +1,5 @@
-import os
-import sys
+import os 
+import sys 
 import json
 import re
 from typing import Optional
@@ -59,23 +59,23 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         model_name = self.model_mapping.get(self.model, self.model)
         logger.info(f"Loading model: {model_name}")
         
-        self.unsloth_model, self.unsloth_tokenizer = FastLanguageModel.from_pretrained(
-            model_name=model_name,
+            self.unsloth_model, self.unsloth_tokenizer = FastLanguageModel.from_pretrained(
+                model_name=model_name,
             dtype=self.dtype,
-            max_seq_length=self.max_seq_length,
+                max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
             full_finetuning=False,
-        )
-        
-        self.unsloth_model = FastLanguageModel.get_peft_model(
-            self.unsloth_model,
+            )
+            
+            self.unsloth_model = FastLanguageModel.get_peft_model(
+                self.unsloth_model,
             r=8,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            lora_alpha=16,
+                lora_alpha=16,
             lora_dropout=0,
             bias="none",
             use_gradient_checkpointing="unsloth",
-            random_state=3407,
+                random_state=3407,
         )
 
     def _generate_text(self, prompt: str) -> str:
@@ -84,30 +84,30 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         
         messages = [{"role": "user", "content": prompt}]
         
-        inputs = self.unsloth_tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            return_dict=True,
+            inputs = self.unsloth_tokenizer.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                return_tensors="pt",
+                return_dict=True,
             reasoning_effort="medium",
-        ).to(self.unsloth_model.device)
-        
-        output = self.unsloth_model.generate(
-            **inputs,
-            max_new_tokens=self.max_new_tokens,
-            do_sample=True,
-            temperature=0.7,
-            pad_token_id=self.unsloth_tokenizer.eos_token_id,
-            eos_token_id=self.unsloth_tokenizer.eos_token_id,
-        )
-        
-        generated_text = self.unsloth_tokenizer.decode(
-            output[0][inputs['input_ids'].shape[1]:], 
-            skip_special_tokens=True
-        )
-        
-        return generated_text.strip()
-
+            ).to(self.unsloth_model.device)
+            
+            output = self.unsloth_model.generate(
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=True,
+                temperature=0.7,
+                pad_token_id=self.unsloth_tokenizer.eos_token_id,
+                eos_token_id=self.unsloth_tokenizer.eos_token_id,
+            )
+            
+            generated_text = self.unsloth_tokenizer.decode(
+                output[0][inputs['input_ids'].shape[1]:], 
+                skip_special_tokens=True
+            )
+            
+            return generated_text.strip()
+                
     def invoke(self, prompt: str, model_type: Optional[str] = None) -> str:
         return self._generate_text(prompt)
 
@@ -125,33 +125,54 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.warning(f"Failed to parse JSON: {e}")
             return text_format(candidate_files=[])
 
-    def _scan_directory(self, path):
-        directories = []
-        files = []
-        
-        try:
-            for item in os.listdir(path):
-                item_path = os.path.join(path, item)
-                if os.path.isdir(item_path):
-                    directories.append(item)
-                elif os.path.isfile(item_path):
-                    files.append(item)
-        except:
-            pass
-        
-        return directories, files
 
-    def _select_path(self, bug, current_path, directories, files):
+    def _get_hierarchical_files(self, bug, code_files):
+        if not code_files:
+            return []
+        
+        # Group files by their directory structure
+        file_tree = {}
+        for file_path in code_files:
+            parts = file_path.split(os.sep)
+            current = file_tree
+            for part in parts[:-1]:  # All except filename
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+            # Add filename to the directory
+            if '_files' not in current:
+                current['_files'] = []
+            current['_files'].append(file_path)
+        
+        # Start exploration from root
+        selected_files = []
+        self._explore_tree(bug, file_tree, selected_files, "")
+        
+        return selected_files
+
+    def _explore_tree(self, bug, tree, selected_files, current_path, max_depth=5):
+        if max_depth <= 0:
+            return
+        
+        # Get directories and files at current level
+        directories = [k for k in tree.keys() if k != '_files']
+        files = tree.get('_files', [])
+        
+        if not directories and not files:
+            return
+        
+        # Present options to LLM
         options = []
         if directories:
-            options.extend([f"DIR: {d}" for d in directories[:10]])  # Limit to avoid context overflow
+            options.extend([f"DIR: {d}" for d in directories[:10]])
         if files:
-            options.extend([f"FILE: {f}" for f in files[:20]])
+            file_names = [os.path.basename(f) for f in files[:20]]
+            options.extend([f"FILE: {name}" for name in file_names])
         
         prompt = f"""
 Bug: {bug.bug_report[:1000]}
 
-Current path: {current_path}
+Current path: {current_path or 'root'}
 Available options:
 {chr(10).join(options)}
 
@@ -165,68 +186,30 @@ Response:"""
         response = self._generate_text(prompt).strip().upper()
         
         if response == "STOP":
-            return None, []
+            return
         
         if "," in response:
             # Multiple files selected
-            selected_files = [f.strip() for f in response.split(",")]
-            return None, [f for f in selected_files if f in files]
-        
-        # Single directory or file
-        response_lower = response.lower()
-        
-        for d in directories:
-            if d.lower() == response_lower:
-                return d, []
-        
-        for f in files:
-            if f.lower() == response_lower:
-                return None, [f]
-        
-        return None, []
-
-    def _explore_hierarchy(self, bug, base_path, current_path="", max_depth=5):
-        if max_depth <= 0:
-            return []
-        
-        full_path = os.path.join(base_path, current_path) if current_path else base_path
-        candidate_files = []
-        
-        directories, files = self._scan_directory(full_path)
-        
-        if not directories and not files:
-            return []
-        
-        selected_dir, selected_files = self._select_path(bug, current_path or ".", directories, files)
-        
-        # Add selected files to candidates
-        for file in selected_files:
-            file_path = os.path.join(current_path, file) if current_path else file
-            candidate_files.append(file_path)
-        
-        # Explore selected directory
-        if selected_dir:
-            next_path = os.path.join(current_path, selected_dir) if current_path else selected_dir
-            candidate_files.extend(self._explore_hierarchy(bug, base_path, next_path, max_depth - 1))
-        
-        return candidate_files
-
-    def _get_hierarchical_files(self, bug, code_files):
-        # Extract base path from first code file
-        if not code_files:
-            return []
-        
-        # Find common base directory
-        base_path = os.path.commonpath([os.path.dirname(f) for f in code_files])
-        
-        # Explore hierarchy starting from base path
-        relative_files = self._explore_hierarchy(bug, base_path)
-        
-        # Convert back to full paths
-        full_paths = [os.path.join(base_path, rf) for rf in relative_files]
-        
-        # Filter to only include files that exist in original code_files
-        return [f for f in full_paths if f in code_files]
+            selected_names = [f.strip() for f in response.split(",")]
+            for file_path in files:
+                if os.path.basename(file_path).upper() in [n.upper() for n in selected_names]:
+                    selected_files.append(file_path)
+        else:
+            # Single directory or file
+            response_lower = response.lower()
+            
+            # Check directories
+            for d in directories:
+                if d.lower() == response_lower:
+                    next_path = os.path.join(current_path, d) if current_path else d
+                    self._explore_tree(bug, tree[d], selected_files, next_path, max_depth - 1)
+                    return
+            
+            # Check files
+            for file_path in files:
+                if os.path.basename(file_path).lower() == response_lower:
+                    selected_files.append(file_path)
+                    return
 
     def localize(self, bug):
         available_tokens = self.max_seq_length - self.max_new_tokens - 250
