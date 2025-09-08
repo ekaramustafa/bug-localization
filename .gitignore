@@ -202,3 +202,5 @@ results/
 # Temporary files
 temp/
 tmp/
+=*
+unsloth_compiled_cache*

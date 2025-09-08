@@ -17,11 +17,11 @@ def main():
                        default='unsloth', help='Localization method to use')
     parser.add_argument('--dataset', choices=['swebench', 'beetlebox'], 
                        default='beetlebox', help='Dataset to use')
-    parser.add_argument('--model', default='gpt-oss', 
+    parser.add_argument('--model', default='qwen3_4b_instruct', 
                        help='Model to use (for HuggingFace: gpt-oss, gpt-oss-120b, etc.)')
     parser.add_argument('--device', choices=['cuda', 'cpu', 'auto'], 
                        default='auto', help='Device for local inference (HuggingFace only)')
-    parser.add_argument('--sample-size', type=int, default=10, 
+    parser.add_argument('--sample-size', type=int, default=1,
                        help='Number of bug instances to process')
     
     args = parser.parse_args()

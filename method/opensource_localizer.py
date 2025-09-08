@@ -67,7 +67,8 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             "gpt-oss-20b-mxfp4": "unsloth/gpt-oss-20b",
             "gpt-oss-120b-mxfp4": "unsloth/gpt-oss-120b",  
             "qwen3_06b": "unsloth/Qwen3-0.6B-unsloth-bnb-4bit",
-            "qwen3_1.4b": "unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
+            "qwen3_1.7b": "unsloth/Qwen3-1.7B-unsloth-bnb-4bit",
+            "qwen3_4b_instruct" : "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit"
         }
         
         # Initialize components
@@ -104,7 +105,9 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             
         # Initialize Qwen extractor model for structured output
         try:
-            self._initialize_qwen_extractor()
+            self.extractor_model = self.unsloth_model
+            self.extractor_tokenizer = self.unsloth_tokenizer
+            # self._initialize_qwen_extractor()
             logger.info("Qwen extractor model initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize Qwen extractor model: {e}")
@@ -155,14 +158,14 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         if not UNSLOTH_AVAILABLE:
             raise ImportError("Unsloth not available for Qwen extractor")
         
-        qwen_model_name = "unsloth/Qwen3-1.7B-unsloth-bnb-4bit"
+        qwen_model_name = "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit"
         logger.info(f"Loading Qwen extractor model: {qwen_model_name}")
         
         try:
             # Load Qwen model using FastModel for structured output extraction
             self.extractor_model, self.extractor_tokenizer = FastModel.from_pretrained(
                 model_name=qwen_model_name,
-                max_seq_length=2055,  
+                max_seq_length=4095,  
                 load_in_4bit=True,   
                 load_in_8bit=False,  
                 full_finetuning=False,
@@ -328,7 +331,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             
             # Parse and validate
             try:
-                response_data = json.loads(json_text)
+                response_data = json.loads(json.loads(json_text))
                 result = text_format(**response_data)
                 logger.info("Successfully extracted structured output using Qwen")
                 return result
