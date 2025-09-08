@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 from method.base import BugLocalizationMethod
 from method.prompt import PromptGenerator
 from method.models import OpenAILocalizerResponse
+from pydantic import BaseModel
+from typing import List, Optional
 from dataset.utils import get_token_count, get_logger
 
 try:
@@ -22,6 +24,10 @@ except ImportError:
     UNSLOTH_AVAILABLE = False
 
 logger = get_logger(__name__)
+
+class DirectorySelectionResponse(BaseModel):
+    selected_directory: Optional[str] = None
+    selected_files: List[str] = []
 
 class OpenSourceLocalizer(BugLocalizationMethod):
     def __init__(self, model="gpt-oss", device=None, max_seq_length=16384, 
@@ -133,12 +139,15 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         # Group files by their directory structure
         file_tree = {}
         for file_path in code_files:
-            parts = file_path.split(os.sep)
+            # Handle both forward and backward slashes
+            parts = file_path.replace('\\', '/').split('/')
             current = file_tree
             for part in parts[:-1]:  # All except filename
-                if part not in current:
+                if part and part not in current:  # Skip empty parts
                     current[part] = {}
-                current = current[part]
+                    current = current[part]
+                elif part in current:
+                    current = current[part]
             # Add filename to the directory
             if '_files' not in current:
                 current['_files'] = []
@@ -170,6 +179,10 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             options.extend([f"FILE: {name}" for name in file_names])
         
         prompt = f"""
+You are given a mixed list of directories and files along with bug_report.
+Your task is to hierarchically extract the possible directories to get the candidate files.
+You must use the provided json_schema to output your result
+
 Bug: {bug.bug_report[:1000]}
 
 Current path: {current_path or 'root'}
@@ -177,39 +190,28 @@ Available options:
 {chr(10).join(options)}
 
 Select ONE of:
-1. Directory name to explore (just the name, no "DIR:" prefix)
-2. Comma-separated file names to add as candidates (just names, no "FILE:" prefix)  
-3. "STOP" if no relevant options
+1. Directory name to explore (set selected_directory field)
+2. File names to add as candidates (set selected_files field with just names, no "FILE:" prefix)  
+3. Leave both fields empty if no relevant options
 
-Response:"""
+You must use the provided json schema for your output"""
         
-        response = self._generate_text(prompt).strip().upper()
+        response = self.invoke_structured(prompt, DirectorySelectionResponse)
         
-        if response == "STOP":
-            return
-        
-        if "," in response:
-            # Multiple files selected
-            selected_names = [f.strip() for f in response.split(",")]
-            for file_path in files:
-                if os.path.basename(file_path).upper() in [n.upper() for n in selected_names]:
-                    selected_files.append(file_path)
-        else:
-            # Single directory or file
-            response_lower = response.lower()
-            
-            # Check directories
+        # Handle directory selection
+        if response.selected_directory:
             for d in directories:
-                if d.lower() == response_lower:
+                if d.lower() == response.selected_directory.lower():
                     next_path = os.path.join(current_path, d) if current_path else d
                     self._explore_tree(bug, tree[d], selected_files, next_path, max_depth - 1)
                     return
-            
-            # Check files
+        
+        # Handle file selection
+        if response.selected_files:
             for file_path in files:
-                if os.path.basename(file_path).lower() == response_lower:
+                file_name = os.path.basename(file_path)
+                if any(file_name.lower() == sf.lower() for sf in response.selected_files):
                     selected_files.append(file_path)
-                    return
 
     def localize(self, bug):
         available_tokens = self.max_seq_length - self.max_new_tokens - 250
