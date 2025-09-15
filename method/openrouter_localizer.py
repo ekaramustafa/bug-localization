@@ -150,11 +150,34 @@ class OpenRouterLocalizer(BugLocalizationMethod):
             logger.error(f"Text generation failed: {e}")
             raise
     
-    def invoke_structured(self, prompt: str, text_format) -> OpenAILocalizerResponse:
-        """Generate structured JSON response using OpenRouter API"""
+    def _generate_json_schema(self, pydantic_model):
+        """Generate JSON schema from Pydantic model for OpenAI structured output"""
         try:
-            # Generate JSON schema for structured output based on the response model
-            response_format = {
+            # Get the JSON schema from the Pydantic model
+            model_schema = pydantic_model.model_json_schema()
+            
+            # Convert to OpenAI's expected format
+            schema_name = pydantic_model.__name__.lower().replace('response', '_response')
+            
+            # Ensure required fields are properly set
+            if 'required' not in model_schema:
+                model_schema['required'] = list(model_schema.get('properties', {}).keys())
+            
+            # Set additionalProperties to False for strict mode
+            model_schema['additionalProperties'] = False
+            
+            return {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema_name,
+                    "strict": True,
+                    "schema": model_schema
+                }
+            }
+        except Exception as e:
+            logger.warning(f"Failed to generate JSON schema from Pydantic model: {e}")
+            # Fallback to basic schema for OpenAILocalizerResponse
+            return {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "bug_localization_response",
@@ -172,6 +195,24 @@ class OpenRouterLocalizer(BugLocalizationMethod):
                     }
                 }
             }
+
+    def invoke_structured(self, prompt: str, text_format) -> OpenAILocalizerResponse:
+        """Generate structured JSON response using OpenRouter API with JSON schema
+        
+        Args:
+            prompt: The input prompt for structured generation
+            text_format: Pydantic model class for response structure
+            
+        Returns:
+            Structured response parsed into the specified Pydantic model
+        """
+        logger.info(f"Starting structured response generation with model: {self.model}")
+        logger.debug(f"Response format: {text_format.__name__}")
+        
+        try:
+            # Generate JSON schema from Pydantic model
+            response_format = self._generate_json_schema(text_format)
+            logger.debug(f"Generated JSON schema: {response_format}")
             
             # Make structured API request
             response_content = self._make_api_request(
@@ -180,29 +221,75 @@ class OpenRouterLocalizer(BugLocalizationMethod):
                 response_format=response_format
             )
             
+            if not response_content:
+                logger.warning("Structured API request returned empty content")
+                return self._create_empty_response(text_format)
+            
             # Parse JSON response
-            response_data = json.loads(response_content)
-            return text_format(**response_data)
+            try:
+                response_data = json.loads(response_content)
+                logger.info("Successfully parsed structured JSON response")
+                logger.debug(f"Parsed data: {response_data}")
+                return text_format(**response_data)
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse JSON from structured response: {e}")
+                logger.debug(f"Raw response content: {response_content[:500]}...")
+                raise
             
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to parse structured response: {e}")
+            logger.warning(f"Structured response parsing failed: {e}")
             # Fallback: try to extract JSON from unstructured response
-            try:
-                response_content = self._make_api_request(prompt)
-                # Look for JSON in the response
-                import re
-                json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
-                if json_match:
-                    response_data = json.loads(json_match.group(0))
-                    return text_format(**response_data)
-            except Exception:
-                pass
-            
-            # Final fallback: return empty response
-            return text_format(candidate_files=[])
+            return self._fallback_structured_parsing(prompt, text_format)
         
         except Exception as e:
             logger.error(f"Structured response generation failed: {e}")
+            return self._create_empty_response(text_format)
+    
+    def _fallback_structured_parsing(self, prompt: str, text_format):
+        """Fallback method to extract structured data from unstructured response"""
+        try:
+            logger.info("Attempting fallback structured parsing with unstructured request")
+            response_content = self._make_api_request(prompt)
+            
+            if not response_content:
+                return self._create_empty_response(text_format)
+            
+            # Look for JSON in the response using regex
+            import re
+            json_match = re.search(r'\{.*\}', response_content, re.DOTALL)
+            if json_match:
+                json_text = json_match.group(0)
+                logger.debug(f"Extracted JSON from unstructured response: {json_text[:200]}...")
+                response_data = json.loads(json_text)
+                return text_format(**response_data)
+            else:
+                logger.warning("No JSON found in unstructured response")
+                return self._create_empty_response(text_format)
+                
+        except Exception as e:
+            logger.warning(f"Fallback structured parsing failed: {e}")
+            return self._create_empty_response(text_format)
+    
+    def _create_empty_response(self, text_format):
+        """Create an empty response of the specified format"""
+        try:
+            # Try to create empty response based on model fields
+            if hasattr(text_format, 'model_fields'):
+                empty_data = {}
+                for field_name, field_info in text_format.model_fields.items():
+                    if field_info.annotation == list or (hasattr(field_info.annotation, '__origin__') and field_info.annotation.__origin__ == list):
+                        empty_data[field_name] = []
+                    elif field_info.annotation == str:
+                        empty_data[field_name] = ""
+                    else:
+                        empty_data[field_name] = None
+                return text_format(**empty_data)
+            else:
+                # Fallback for older Pydantic versions or unknown structure
+                return text_format(candidate_files=[])
+        except Exception as e:
+            logger.warning(f"Failed to create empty response: {e}")
+            # Final fallback - assume it's OpenAILocalizerResponse-like
             return text_format(candidate_files=[])
     
     def test_api_connectivity(self) -> bool:
