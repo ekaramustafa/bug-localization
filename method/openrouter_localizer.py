@@ -22,23 +22,58 @@ class DirectorySelectionResponse(BaseModel):
 
 
 class OpenRouterLocalizer(BugLocalizationMethod):
-    def __init__(self, model="qwen/qwen-2.5-coder-32b-instruct", max_tokens=4096, temperature=0.7):
+    def __init__(self, model="qwen-coder-32b", max_tokens=4096, temperature=0.7):
         super().__init__()
         load_dotenv()
         
-        self.model = model
+        # Comprehensive model mapping for user-friendly names to OpenRouter model IDs
+        # Note: Model availability may vary on OpenRouter, some models may be temporarily unavailable
+        self.model_mapping = {
+            # Free models (verified working)
+            "gpt-oss-20b": "openai/gpt-oss-20b:free",
+            "phi-3-mini": "microsoft/phi-3-mini-128k-instruct:free",
+            "qwen-2.5-7b": "qwen/qwen-2.5-7b-instruct:free",
+            
+            # Free models (may have limited availability)
+            "llama-3.1-8b": "meta-llama/llama-3.1-8b-instruct:free",
+            "llama-3.2-3b": "meta-llama/llama-3.2-3b-instruct:free",
+            "gemma-7b": "google/gemma-7b-it:free",
+            
+            # Coding-focused models (recommended for bug localization)
+            "qwen-coder-32b": "qwen/qwen-2.5-coder-32b-instruct",
+            "qwen-coder-7b": "qwen/qwen-2.5-coder-7b-instruct",
+            "deepseek-coder": "deepseek/deepseek-coder",
+            "deepseek-coder-v2": "deepseek/deepseek-coder-v2-lite-instruct",
+            "codellama-34b": "codellama/codellama-34b-instruct",
+            "codellama-13b": "codellama/codellama-13b-instruct",
+            "codellama-7b": "codellama/codellama-7b-instruct",
+            "starcoder2-15b": "bigcode/starcoder2-15b-instruct",
+            "wizardcoder-34b": "wizardlm/wizardcoder-python-34b-v1.0",
+            
+            # General purpose models
+            "llama-3.1-70b": "meta-llama/llama-3.1-70b-instruct",
+            "llama-3.1-405b": "meta-llama/llama-3.1-405b-instruct",
+            "mixtral-8x7b": "mistralai/mixtral-8x7b-instruct",
+            "mixtral-8x22b": "mistralai/mixtral-8x22b-instruct",
+            "nous-hermes-2": "nousresearch/nous-hermes-2-mixtral-8x7b-dpo",
+            "openchat-3.5": "openchat/openchat-7b",
+            
+            # Premium models (require credits)
+            "claude-3-haiku": "anthropic/claude-3-haiku",
+            "claude-3-sonnet": "anthropic/claude-3-5-sonnet",
+            "gpt-4o": "openai/gpt-4o",
+            "gpt-4o-mini": "openai/gpt-4o-mini",
+            "gemini-pro": "google/gemini-pro",
+            "gemini-flash": "google/gemini-flash-1.5",
+        }
+        
+        # Default model for bug localization (coding-focused and free)
+        self.default_model = "qwen-coder-32b"
+        
+        # Validate and set model
+        self.model = self._validate_and_set_model(model)
         self.max_tokens = max_tokens
         self.temperature = temperature
-        
-        # Model mapping for user-friendly names to OpenRouter model IDs
-        self.model_mapping = {
-            "qwen-coder-32b": "qwen/qwen-2.5-coder-32b-instruct",
-            "deepseek-coder": "deepseek/deepseek-coder",
-            "codellama-34b": "codellama/codellama-34b-instruct",
-            "mixtral-8x7b": "mistralai/mixtral-8x7b-instruct",
-            "llama-3.1-70b": "meta-llama/llama-3.1-70b-instruct",
-            "gpt-oss-20b": "openai/gpt-oss-20b:free"
-        }
         
         # Load API key from environment
         self.api_key = os.getenv("OPENROUTER_API_KEY")
@@ -53,13 +88,113 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         
         self.prompt_generator = PromptGenerator()
         
-        logger.info(f"OpenRouterLocalizer initialized with model: {self.model}")
+        logger.info(f"OpenRouterLocalizer initialized with model: {self.model} -> {self.get_model_id()}")
+    
+    def _validate_and_set_model(self, model: str) -> str:
+        """Validate model specification and return validated model name
+        
+        Args:
+            model: User-provided model name (can be friendly name or full OpenRouter ID)
+            
+        Returns:
+            Validated model name (friendly name if available, otherwise original)
+            
+        Raises:
+            ValueError: If model is invalid or not supported
+        """
+        if not model or not isinstance(model, str):
+            logger.warning(f"Invalid model specification: {model}, using default: {self.default_model}")
+            return self.default_model
+        
+        model = model.strip()
+        
+        # Check if it's a friendly name in our mapping
+        if model in self.model_mapping:
+            logger.info(f"Using friendly model name: {model} -> {self.model_mapping[model]}")
+            return model
+        
+        # Check if it's already a full OpenRouter model ID
+        if "/" in model and any(model == full_id for full_id in self.model_mapping.values()):
+            # Find the friendly name for this full ID
+            for friendly_name, full_id in self.model_mapping.items():
+                if full_id == model:
+                    logger.info(f"Recognized full model ID, using friendly name: {friendly_name}")
+                    return friendly_name
+            # If not found in reverse lookup, use as-is but log warning
+            logger.warning(f"Using full model ID directly: {model}")
+            return model
+        
+        # Check if it's a partial match (case-insensitive)
+        model_lower = model.lower()
+        for friendly_name in self.model_mapping.keys():
+            if model_lower in friendly_name.lower() or friendly_name.lower() in model_lower:
+                logger.info(f"Found partial match: {model} -> {friendly_name}")
+                return friendly_name
+        
+        # If no match found, check if it looks like a valid OpenRouter model ID
+        if "/" in model and len(model.split("/")) >= 2:
+            logger.warning(f"Unknown OpenRouter model ID, attempting to use: {model}")
+            # Store it in mapping for this session
+            self.model_mapping[model] = model
+            return model
+        
+        # Invalid model specification
+        available_models = list(self.model_mapping.keys())
+        error_msg = (f"Invalid model specification: '{model}'. "
+                    f"Available models: {', '.join(available_models[:10])}... "
+                    f"(total: {len(available_models)} models). "
+                    f"Using default: {self.default_model}")
+        logger.error(error_msg)
+        
+        # Use default model instead of raising exception to be more user-friendly
+        return self.default_model
+    
+    def get_model_id(self) -> str:
+        """Get the full OpenRouter model ID for the current model
+        
+        Returns:
+            Full OpenRouter model identifier
+        """
+        return self.model_mapping.get(self.model, self.model)
+    
+    def get_available_models(self) -> dict:
+        """Get dictionary of all available models
+        
+        Returns:
+            Dictionary mapping friendly names to OpenRouter model IDs
+        """
+        return self.model_mapping.copy()
+    
+    def list_models_by_category(self) -> dict:
+        """Get models organized by category for easier selection
+        
+        Returns:
+            Dictionary with model categories and their models
+        """
+        categories = {
+            "free": [],
+            "coding": [],
+            "general": [],
+            "specialized": []
+        }
+        
+        for friendly_name, model_id in self.model_mapping.items():
+            if ":free" in model_id:
+                categories["free"].append(friendly_name)
+            elif any(keyword in friendly_name for keyword in ["coder", "code", "star"]):
+                categories["coding"].append(friendly_name)
+            elif any(keyword in friendly_name for keyword in ["llama", "gpt", "claude", "gemini", "mixtral"]):
+                categories["general"].append(friendly_name)
+            else:
+                categories["specialized"].append(friendly_name)
+        
+        return categories
     
     def _make_api_request(self, prompt: str, structured: bool = False, response_format=None) -> str:
         """Make API request to OpenRouter using OpenAI client with proper error handling"""
         try:
-            # Map user-friendly model name to OpenRouter model ID
-            model_id = self.model_mapping.get(self.model, self.model)
+            # Get the validated OpenRouter model ID
+            model_id = self.get_model_id()
             
             # Prepare request parameters
             request_params = {
@@ -114,8 +249,14 @@ class OpenRouterLocalizer(BugLocalizationMethod):
                 logger.error("Failed to connect to OpenRouter API")
                 raise ValueError("Network connection error - check your internet connection") from e
             elif isinstance(e, APIError):
-                logger.error(f"OpenRouter API error: {e}")
-                raise ValueError(f"API error: {e}") from e
+                error_msg = str(e)
+                if "404" in error_msg and "No endpoints found" in error_msg:
+                    logger.error(f"Model not available on OpenRouter: {model_id}")
+                    raise ValueError(f"Model '{model_id}' is not currently available on OpenRouter. "
+                                   f"Try a different model or check OpenRouter's model availability.") from e
+                else:
+                    logger.error(f"OpenRouter API error: {e}")
+                    raise ValueError(f"API error: {e}") from e
             else:
                 logger.error(f"Unexpected error during API request: {e}")
                 raise ValueError(f"Unexpected error: {e}") from e
@@ -314,6 +455,129 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         except Exception as e:
             logger.error(f"API connectivity test failed: {e}")
             return False
+    
+    def check_model_availability(self, model_name: str = None) -> bool:
+        """Check if a specific model is available on OpenRouter
+        
+        Args:
+            model_name: Model name to check (uses current model if None)
+            
+        Returns:
+            True if model is available, False otherwise
+        """
+        if model_name is None:
+            model_name = self.model
+        
+        original_model = self.model
+        
+        try:
+            # Temporarily switch to test model
+            self.model = self._validate_and_set_model(model_name)
+            model_id = self.get_model_id()
+            
+            logger.info(f"Checking availability of model: {model_name} -> {model_id}")
+            
+            # Simple test prompt
+            test_prompt = "Test"
+            
+            # Make a minimal API request
+            response = self._make_api_request(test_prompt)
+            
+            if response:
+                logger.info(f"Model {model_name} is available")
+                return True
+            else:
+                logger.warning(f"Model {model_name} returned empty response")
+                return False
+                
+        except Exception as e:
+            error_msg = str(e)
+            if "not currently available" in error_msg or "404" in error_msg:
+                logger.warning(f"Model {model_name} is not available: {e}")
+            else:
+                logger.error(f"Error checking model {model_name}: {e}")
+            return False
+        finally:
+            # Restore original model
+            self.model = original_model
+    
+    def test_model_compatibility(self, test_models: List[str] = None) -> dict:
+        """Test compatibility with different OpenRouter models
+        
+        Args:
+            test_models: List of model names to test (uses default set if None)
+            
+        Returns:
+            Dictionary with test results for each model
+        """
+        if test_models is None:
+            # Test a representative set of models from different categories
+            test_models = [
+                "gpt-oss-20b",      # Free model
+                "qwen-coder-32b",   # Coding model (default)
+                "llama-3.1-8b",     # Free general model
+                "deepseek-coder",   # Alternative coding model
+                "mixtral-8x7b"      # General purpose model
+            ]
+        
+        results = {}
+        original_model = self.model
+        
+        logger.info(f"Testing compatibility with {len(test_models)} models")
+        
+        for model_name in test_models:
+            logger.info(f"Testing model: {model_name}")
+            
+            try:
+                # Temporarily switch to test model
+                self.model = self._validate_and_set_model(model_name)
+                model_id = self.get_model_id()
+                
+                # Simple test prompt for code understanding
+                test_prompt = """
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+# What does this function do? Respond in one sentence.
+"""
+                
+                # Test basic text generation
+                response = self._make_api_request(test_prompt)
+                
+                if response and len(response.strip()) > 10:
+                    results[model_name] = {
+                        "status": "success",
+                        "model_id": model_id,
+                        "response_length": len(response),
+                        "response_preview": response[:100] + "..." if len(response) > 100 else response
+                    }
+                    logger.info(f"Model {model_name} test successful")
+                else:
+                    results[model_name] = {
+                        "status": "failed",
+                        "model_id": model_id,
+                        "error": "Empty or too short response"
+                    }
+                    logger.warning(f"Model {model_name} test failed: empty response")
+                    
+            except Exception as e:
+                results[model_name] = {
+                    "status": "error",
+                    "model_id": self.model_mapping.get(model_name, model_name),
+                    "error": str(e)
+                }
+                logger.error(f"Model {model_name} test error: {e}")
+        
+        # Restore original model
+        self.model = original_model
+        
+        # Log summary
+        successful_models = [name for name, result in results.items() if result["status"] == "success"]
+        logger.info(f"Model compatibility test completed: {len(successful_models)}/{len(test_models)} models successful")
+        
+        return results
     
     def cleanup(self):
         """Cleanup resources (minimal for API-based approach)"""
