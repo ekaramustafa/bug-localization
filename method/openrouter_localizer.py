@@ -450,7 +450,178 @@ You must use the provided json schema for your output"""
             # Continue exploration despite errors
 
     def localize(self, bug):
-        """Main bug localization method - placeholder for now"""
-        # This will be implemented in later tasks
-        logger.info("Localize method called - implementation pending")
-        return OpenAILocalizerResponse(candidate_files=[])
+        """Main bug localization method with token management and hierarchical selection
+        
+        Args:
+            bug: BugInstance containing bug report, code files, and other context
+            
+        Returns:
+            OpenAILocalizerResponse with candidate files and reasoning
+        """
+        logger.info(f"Starting bug localization for instance: {bug.instance_id}")
+        logger.info(f"Repository: {bug.repo}")
+        logger.info(f"Total code files: {len(bug.code_files) if bug.code_files else 0}")
+        
+        if not bug.code_files:
+            logger.warning("No code files provided for localization")
+            return OpenAILocalizerResponse(candidate_files=[])
+        
+        # Import token counting utility
+        from dataset.utils import get_token_count
+        
+        # Calculate available tokens for context (reserve tokens for response)
+        # Most OpenRouter models have context windows between 8k-32k tokens
+        # We'll use a conservative estimate and reserve space for the response
+        max_context_tokens = 8000  # Conservative estimate for most models
+        reserved_response_tokens = self.max_tokens  # Reserve space for model response
+        available_tokens = max_context_tokens - reserved_response_tokens - 500  # Extra buffer
+        
+        logger.info(f"Token budget: max_context={max_context_tokens}, "
+                   f"reserved_response={reserved_response_tokens}, "
+                   f"available={available_tokens}")
+        
+        # Try direct processing first - generate full prompt and check token count
+        logger.info("Attempting direct processing with all files")
+        full_prompt = self.prompt_generator.generate_openai_prompt(bug)
+        full_prompt_tokens = get_token_count(full_prompt, model="gpt-4o")
+        
+        logger.info(f"Full prompt token count: {full_prompt_tokens}")
+        
+        if full_prompt_tokens <= available_tokens:
+            logger.info("Full prompt fits within token limit, proceeding with direct processing")
+            try:
+                response = self.invoke_structured(full_prompt, OpenAILocalizerResponse)
+                logger.info(f"Direct processing successful, found {len(response.candidate_files)} candidates")
+                return response
+            except Exception as e:
+                logger.error(f"Direct processing failed: {e}")
+                # Fall through to hierarchical approach
+        else:
+            logger.info(f"Full prompt ({full_prompt_tokens} tokens) exceeds limit ({available_tokens} tokens)")
+        
+        # Fallback to hierarchical file selection
+        logger.info("Using hierarchical file selection to reduce context size")
+        try:
+            selected_files = self._get_hierarchical_files(bug, bug.code_files)
+            
+            if not selected_files:
+                logger.warning("Hierarchical selection returned no files")
+                return OpenAILocalizerResponse(candidate_files=[])
+            
+            logger.info(f"Hierarchical selection chose {len(selected_files)} files")
+            logger.debug(f"Selected files: {selected_files[:10]}...")  # Log first 10 files
+            
+            # Create prompt with selected files
+            selected_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files)
+            selected_prompt_tokens = get_token_count(selected_prompt, model="gpt-4o")
+            
+            logger.info(f"Selected files prompt token count: {selected_prompt_tokens}")
+            
+            # If still too large, implement progressive reduction
+            if selected_prompt_tokens > available_tokens:
+                logger.warning(f"Selected files prompt still too large ({selected_prompt_tokens} tokens)")
+                return self._progressive_file_reduction(bug, selected_files, available_tokens)
+            
+            # Process with selected files
+            response = self.invoke_structured(selected_prompt, OpenAILocalizerResponse)
+            logger.info(f"Hierarchical processing successful, found {len(response.candidate_files)} candidates")
+            return response
+            
+        except Exception as e:
+            logger.error(f"Hierarchical processing failed: {e}")
+            # Final fallback - try with minimal context
+            return self._minimal_context_fallback(bug, available_tokens)
+    
+    def _progressive_file_reduction(self, bug, selected_files, available_tokens):
+        """Progressively reduce the number of files until prompt fits within token limit
+        
+        Args:
+            bug: BugInstance object
+            selected_files: List of selected file paths
+            available_tokens: Maximum tokens available for the prompt
+            
+        Returns:
+            OpenAILocalizerResponse with results from reduced file set
+        """
+        logger.info("Starting progressive file reduction")
+        
+        from dataset.utils import get_token_count
+        
+        # Try reducing files in batches
+        reduction_steps = [0.8, 0.6, 0.4, 0.2, 0.1]  # Reduce to 80%, 60%, 40%, 20%, 10%
+        
+        for reduction_factor in reduction_steps:
+            reduced_count = max(1, int(len(selected_files) * reduction_factor))
+            reduced_files = selected_files[:reduced_count]
+            
+            logger.info(f"Trying with {reduced_count} files (reduction factor: {reduction_factor})")
+            
+            reduced_prompt = self.prompt_generator.generate_openai_prompt(bug, reduced_files)
+            reduced_tokens = get_token_count(reduced_prompt, model="gpt-4o")
+            
+            logger.debug(f"Reduced prompt tokens: {reduced_tokens}")
+            
+            if reduced_tokens <= available_tokens:
+                logger.info(f"Found suitable reduction: {reduced_count} files, {reduced_tokens} tokens")
+                try:
+                    response = self.invoke_structured(reduced_prompt, OpenAILocalizerResponse)
+                    logger.info(f"Progressive reduction successful, found {len(response.candidate_files)} candidates")
+                    return response
+                except Exception as e:
+                    logger.error(f"Progressive reduction failed at {reduction_factor}: {e}")
+                    continue
+        
+        logger.warning("Progressive reduction failed at all levels")
+        return self._minimal_context_fallback(bug, available_tokens)
+    
+    def _minimal_context_fallback(self, bug, available_tokens):
+        """Final fallback with minimal context when all other approaches fail
+        
+        Args:
+            bug: BugInstance object
+            available_tokens: Maximum tokens available for the prompt
+            
+        Returns:
+            OpenAILocalizerResponse with best-effort results
+        """
+        logger.info("Using minimal context fallback")
+        
+        from dataset.utils import get_token_count
+        
+        try:
+            # Create a minimal prompt with just the bug report and a few files
+            # Take the first few files that might be most relevant based on name patterns
+            priority_files = []
+            
+            # Look for files that might be relevant based on common patterns
+            for file_path in bug.code_files[:50]:  # Check first 50 files
+                file_name = file_path.lower()
+                # Prioritize files with common bug-related patterns
+                if any(pattern in file_name for pattern in ['main', 'core', 'base', 'util', 'service', 'controller', 'model']):
+                    priority_files.append(file_path)
+                if len(priority_files) >= 10:  # Limit to 10 priority files
+                    break
+            
+            # If no priority files found, just take the first few
+            if not priority_files:
+                priority_files = bug.code_files[:5]
+            
+            logger.info(f"Minimal context using {len(priority_files)} priority files")
+            
+            minimal_prompt = self.prompt_generator.generate_openai_prompt(bug, priority_files)
+            minimal_tokens = get_token_count(minimal_prompt, model="gpt-4o")
+            
+            logger.info(f"Minimal prompt tokens: {minimal_tokens}")
+            
+            if minimal_tokens <= available_tokens:
+                response = self.invoke_structured(minimal_prompt, OpenAILocalizerResponse)
+                logger.info(f"Minimal context fallback successful, found {len(response.candidate_files)} candidates")
+                return response
+            else:
+                logger.error(f"Even minimal context ({minimal_tokens} tokens) exceeds limit")
+                # Return empty response as last resort
+                return OpenAILocalizerResponse(candidate_files=[])
+                
+        except Exception as e:
+            logger.error(f"Minimal context fallback failed: {e}")
+            return OpenAILocalizerResponse(candidate_files=[])
