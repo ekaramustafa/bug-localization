@@ -56,7 +56,7 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         logger.info(f"OpenRouterLocalizer initialized with model: {self.model}")
     
     def _make_api_request(self, prompt: str, structured: bool = False, response_format=None) -> str:
-        """Make API request to OpenRouter using OpenAI client"""
+        """Make API request to OpenRouter using OpenAI client with proper error handling"""
         try:
             # Map user-friendly model name to OpenRouter model ID
             model_id = self.model_mapping.get(self.model, self.model)
@@ -77,18 +77,40 @@ class OpenRouterLocalizer(BugLocalizationMethod):
             if structured and response_format:
                 request_params["response_format"] = response_format
             
+            logger.debug(f"Making API request to model: {model_id}")
+            
             # Make the API call
             completion = self.client.chat.completions.create(**request_params)
             
             # Extract response content
             response_content = completion.choices[0].message.content
             
+            if not response_content:
+                logger.warning("API returned empty response content")
+                return ""
+            
             logger.debug(f"API request successful, response length: {len(response_content)}")
             return response_content
             
         except Exception as e:
-            logger.error(f"OpenRouter API request failed: {e}")
-            raise
+            # Handle specific OpenAI client exceptions
+            from openai import APIError, RateLimitError, AuthenticationError, APIConnectionError
+            
+            if isinstance(e, AuthenticationError):
+                logger.error("OpenRouter API authentication failed - check your API key")
+                raise ValueError("Invalid OpenRouter API key") from e
+            elif isinstance(e, RateLimitError):
+                logger.error("OpenRouter API rate limit exceeded")
+                raise ValueError("Rate limit exceeded - please try again later") from e
+            elif isinstance(e, APIConnectionError):
+                logger.error("Failed to connect to OpenRouter API")
+                raise ValueError("Network connection error - check your internet connection") from e
+            elif isinstance(e, APIError):
+                logger.error(f"OpenRouter API error: {e}")
+                raise ValueError(f"API error: {e}") from e
+            else:
+                logger.error(f"Unexpected error during API request: {e}")
+                raise ValueError(f"Unexpected error: {e}") from e
     
     def invoke(self, prompt: str, model_type: Optional[str] = None) -> str:
         """Generate text response using OpenRouter API"""
@@ -97,7 +119,7 @@ class OpenRouterLocalizer(BugLocalizationMethod):
     def invoke_structured(self, prompt: str, text_format) -> OpenAILocalizerResponse:
         """Generate structured JSON response using OpenRouter API"""
         try:
-            # Generate JSON schema for structured output
+            # Generate JSON schema for structured output based on the response model
             response_format = {
                 "type": "json_schema",
                 "json_schema": {
@@ -109,8 +131,7 @@ class OpenRouterLocalizer(BugLocalizationMethod):
                             "candidate_files": {
                                 "type": "array",
                                 "items": {"type": "string"}
-                            },
-                            "reasoning": {"type": "string"}
+                            }
                         },
                         "required": ["candidate_files"],
                         "additionalProperties": False
@@ -149,6 +170,29 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         except Exception as e:
             logger.error(f"Structured response generation failed: {e}")
             return text_format(candidate_files=[])
+    
+    def test_api_connectivity(self) -> bool:
+        """Test basic API connectivity with a simple completion request"""
+        try:
+            logger.info("Testing OpenRouter API connectivity...")
+            
+            # Simple test prompt
+            test_prompt = "Hello, this is a test. Please respond with 'API connection successful'."
+            
+            # Make a simple API request
+            response = self._make_api_request(test_prompt)
+            
+            if response and len(response.strip()) > 0:
+                logger.info("API connectivity test successful")
+                logger.debug(f"Test response: {response[:100]}...")
+                return True
+            else:
+                logger.error("API connectivity test failed - empty response")
+                return False
+                
+        except Exception as e:
+            logger.error(f"API connectivity test failed: {e}")
+            return False
     
     def cleanup(self):
         """Cleanup resources (minimal for API-based approach)"""
