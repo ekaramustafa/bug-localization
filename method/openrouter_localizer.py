@@ -77,10 +77,17 @@ class OpenRouterLocalizer(BugLocalizationMethod):
             if structured and response_format:
                 request_params["response_format"] = response_format
             
-            logger.debug(f"Making API request to model: {model_id}")
+            logger.info(f"Making API request to model: {model_id}")
+            logger.debug(f"Request parameters: max_tokens={self.max_tokens}, temperature={self.temperature}")
             
             # Make the API call
             completion = self.client.chat.completions.create(**request_params)
+            
+            # Log API response metadata
+            if hasattr(completion, 'usage') and completion.usage:
+                logger.info(f"API usage - prompt_tokens: {completion.usage.prompt_tokens}, "
+                           f"completion_tokens: {completion.usage.completion_tokens}, "
+                           f"total_tokens: {completion.usage.total_tokens}")
             
             # Extract response content
             response_content = completion.choices[0].message.content
@@ -89,7 +96,8 @@ class OpenRouterLocalizer(BugLocalizationMethod):
                 logger.warning("API returned empty response content")
                 return ""
             
-            logger.debug(f"API request successful, response length: {len(response_content)}")
+            logger.info(f"API request successful, response length: {len(response_content)} characters")
+            logger.debug(f"Response content preview: {response_content[:200]}...")
             return response_content
             
         except Exception as e:
@@ -113,8 +121,34 @@ class OpenRouterLocalizer(BugLocalizationMethod):
                 raise ValueError(f"Unexpected error: {e}") from e
     
     def invoke(self, prompt: str, model_type: Optional[str] = None) -> str:
-        """Generate text response using OpenRouter API"""
-        return self._make_api_request(prompt)
+        """Generate text response using OpenRouter API
+        
+        Args:
+            prompt: The input prompt for text generation
+            model_type: Optional model type override (not used in this implementation)
+            
+        Returns:
+            Generated text response from the model
+        """
+        logger.info(f"Starting text generation with model: {self.model}")
+        logger.debug(f"Prompt length: {len(prompt)} characters")
+        
+        try:
+            # Make API request for regular text completion
+            response = self._make_api_request(prompt)
+            
+            # Log response details
+            if response:
+                logger.info(f"Text generation successful, response length: {len(response)} characters")
+                logger.debug(f"Response preview: {response[:200]}...")
+            else:
+                logger.warning("Text generation returned empty response")
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Text generation failed: {e}")
+            raise
     
     def invoke_structured(self, prompt: str, text_format) -> OpenAILocalizerResponse:
         """Generate structured JSON response using OpenRouter API"""
