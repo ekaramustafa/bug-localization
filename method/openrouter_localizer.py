@@ -326,6 +326,129 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         except:
             pass
     
+    def _get_hierarchical_files(self, bug, code_files):
+        """Get hierarchical file selection using directory tree exploration
+        
+        Args:
+            bug: BugInstance containing bug report and context
+            code_files: List of file paths to organize hierarchically
+            
+        Returns:
+            List of selected file paths based on hierarchical exploration
+        """
+        if not code_files:
+            logger.warning("No code files provided for hierarchical selection")
+            return []
+        
+        logger.info(f"Starting hierarchical file selection with {len(code_files)} files")
+        
+        # Group files by their directory structure
+        file_tree = {}
+        for file_path in code_files:
+            # Handle both forward and backward slashes
+            parts = file_path.replace('\\', '/').split('/')
+            current = file_tree
+            for part in parts[:-1]:  # All except filename
+                if part and part not in current:  # Skip empty parts
+                    current[part] = {}
+                    current = current[part]
+                elif part in current:
+                    current = current[part]
+            # Add filename to the directory
+            if '_files' not in current:
+                current['_files'] = []
+            current['_files'].append(file_path)
+        
+        logger.debug(f"Built file tree with {len(file_tree)} root directories")
+        
+        # Start exploration from root
+        selected_files = []
+        self._explore_tree(bug, file_tree, selected_files, "")
+        
+        logger.info(f"Hierarchical selection completed, selected {len(selected_files)} files")
+        return selected_files
+
+    def _explore_tree(self, bug, tree, selected_files, current_path, max_depth=5):
+        """Recursively explore directory tree to select relevant files
+        
+        Args:
+            bug: BugInstance containing bug report and context
+            tree: Dictionary representing directory structure
+            selected_files: List to accumulate selected file paths
+            current_path: Current directory path being explored
+            max_depth: Maximum recursion depth to prevent infinite loops
+        """
+        if max_depth <= 0:
+            logger.debug(f"Maximum exploration depth reached at path: {current_path}")
+            return
+        
+        # Get directories and files at current level
+        directories = [k for k in tree.keys() if k != '_files']
+        files = tree.get('_files', [])
+        
+        if not directories and not files:
+            logger.debug(f"No directories or files found at path: {current_path}")
+            return
+        
+        logger.debug(f"Exploring path '{current_path}': {len(directories)} directories, {len(files)} files")
+        
+        # Present options to LLM
+        options = []
+        if directories:
+            options.extend([f"DIR: {d}" for d in directories[:10]])  # Limit to 10 directories
+        if files:
+            file_names = [os.path.basename(f) for f in files[:20]]  # Limit to 20 files
+            options.extend([f"FILE: {name}" for name in file_names])
+        
+        # Create exploration prompt
+        prompt = f"""
+You are given a mixed list of directories and files along with bug_report.
+Your task is to hierarchically extract the possible directories to get the candidate files.
+You must use the provided json_schema to output your result
+
+Bug: {bug.bug_report[:1000]}
+
+Current path: {current_path or 'root'}
+Available options:
+{chr(10).join(options)}
+
+Select ONE of:
+1. Directory name to explore (set selected_directory field)
+2. File names to add as candidates (set selected_files field with just names, no "FILE:" prefix)  
+3. Leave both fields empty if no relevant options
+
+You must use the provided json schema for your output"""
+        
+        logger.debug(f"Sending exploration prompt for path: {current_path}")
+        
+        try:
+            # Get structured response from the model
+            response = self.invoke_structured(prompt, DirectorySelectionResponse)
+            
+            # Handle directory selection
+            if response.selected_directory:
+                logger.debug(f"Model selected directory: {response.selected_directory}")
+                for d in directories:
+                    if d.lower() == response.selected_directory.lower():
+                        next_path = os.path.join(current_path, d) if current_path else d
+                        logger.debug(f"Exploring selected directory: {next_path}")
+                        self._explore_tree(bug, tree[d], selected_files, next_path, max_depth - 1)
+                        return
+                logger.warning(f"Selected directory '{response.selected_directory}' not found in available directories")
+            
+            # Handle file selection
+            if response.selected_files:
+                logger.debug(f"Model selected files: {response.selected_files}")
+                for file_path in files:
+                    file_name = os.path.basename(file_path)
+                    if any(file_name.lower() == sf.lower() for sf in response.selected_files):
+                        selected_files.append(file_path)
+                        logger.debug(f"Added file to selection: {file_path}")
+                        
+        except Exception as e:
+            logger.error(f"Error during tree exploration at path '{current_path}': {e}")
+            # Continue exploration despite errors
+
     def localize(self, bug):
         """Main bug localization method - placeholder for now"""
         # This will be implemented in later tasks
