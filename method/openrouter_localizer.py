@@ -88,7 +88,15 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         
         self.prompt_generator = PromptGenerator()
         
+        # Initialize execution tracking for cleanup statistics
+        self._api_call_count = 0
+        self._total_tokens_used = 0
+        self._successful_requests = 0
+        self._failed_requests = 0
+        
         logger.info(f"OpenRouterLocalizer initialized with model: {self.model} -> {self.get_model_id()}")
+        logger.info(f"Initialization parameters: max_tokens={self.max_tokens}, temperature={self.temperature}")
+        logger.debug(f"Available models: {len(self.model_mapping)} total")
     
     def _validate_and_set_model(self, model: str) -> str:
         """Validate model specification and return validated model name
@@ -215,14 +223,22 @@ class OpenRouterLocalizer(BugLocalizationMethod):
             logger.info(f"Making API request to model: {model_id}")
             logger.debug(f"Request parameters: max_tokens={self.max_tokens}, temperature={self.temperature}")
             
+            # Increment API call counter
+            self._api_call_count += 1
+            
             # Make the API call
             completion = self.client.chat.completions.create(**request_params)
             
-            # Log API response metadata
+            # Track successful request
+            self._successful_requests += 1
+            
+            # Log API response metadata and track token usage
             if hasattr(completion, 'usage') and completion.usage:
+                tokens_used = completion.usage.total_tokens
+                self._total_tokens_used += tokens_used
                 logger.info(f"API usage - prompt_tokens: {completion.usage.prompt_tokens}, "
                            f"completion_tokens: {completion.usage.completion_tokens}, "
-                           f"total_tokens: {completion.usage.total_tokens}")
+                           f"total_tokens: {tokens_used}")
             
             # Extract response content
             response_content = completion.choices[0].message.content
@@ -236,6 +252,9 @@ class OpenRouterLocalizer(BugLocalizationMethod):
             return response_content
             
         except Exception as e:
+            # Track failed request
+            self._failed_requests += 1
+            
             # Handle specific OpenAI client exceptions
             from openai import APIError, RateLimitError, AuthenticationError, APIConnectionError
             
@@ -580,14 +599,64 @@ def fibonacci(n):
         return results
     
     def cleanup(self):
-        """Cleanup resources (minimal for API-based approach)"""
-        logger.info("OpenRouterLocalizer cleanup completed")
+        """Cleanup resources and log execution statistics
+        
+        For API-based approach, cleanup is minimal but includes:
+        - Clearing client references
+        - Logging execution statistics
+        - Resetting internal state
+        """
+        try:
+            logger.info("Starting OpenRouterLocalizer cleanup")
+            
+            # Log execution statistics if available
+            if hasattr(self, '_api_call_count'):
+                logger.info(f"Total API calls made: {self._api_call_count}")
+            if hasattr(self, '_total_tokens_used'):
+                logger.info(f"Total tokens used: {self._total_tokens_used}")
+            if hasattr(self, '_successful_requests'):
+                logger.info(f"Successful requests: {self._successful_requests}")
+            if hasattr(self, '_failed_requests'):
+                logger.info(f"Failed requests: {self._failed_requests}")
+            
+            # Clear client reference (helps with garbage collection)
+            if hasattr(self, 'client'):
+                self.client = None
+                logger.debug("OpenAI client reference cleared")
+            
+            # Clear model mapping and other large objects
+            if hasattr(self, 'model_mapping'):
+                self.model_mapping.clear()
+                logger.debug("Model mapping cleared")
+            
+            # Clear prompt generator reference
+            if hasattr(self, 'prompt_generator'):
+                self.prompt_generator = None
+                logger.debug("Prompt generator reference cleared")
+            
+            # Reset API key reference for security
+            if hasattr(self, 'api_key'):
+                self.api_key = None
+                logger.debug("API key reference cleared")
+            
+            logger.info("OpenRouterLocalizer cleanup completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Error during OpenRouterLocalizer cleanup: {e}")
+            # Don't re-raise exceptions in cleanup to avoid masking original errors
     
     def __del__(self):
-        """Automatic cleanup on object destruction"""
+        """Automatic cleanup on object destruction
+        
+        Ensures resources are properly cleaned up even if cleanup() is not called explicitly.
+        Uses try-except to prevent exceptions during garbage collection.
+        """
         try:
+            logger.debug("OpenRouterLocalizer destructor called")
             self.cleanup()
-        except:
+        except Exception as e:
+            # Silently handle cleanup errors in destructor to avoid issues during garbage collection
+            # We can't use logger here as it might already be cleaned up
             pass
     
     def _get_hierarchical_files(self, bug, code_files):

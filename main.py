@@ -3,6 +3,7 @@ from dataset.beetlebox import BeetleBox
 from method.openai_localizer import OpenAILocalizer
 from method.openai_free_localizer import OpenAIFreeLocalizer
 from method.opensource_localizer import OpenSourceLocalizer
+from method.openrouter_localizer import OpenRouterLocalizer
 from dataset.utils import setup_logging, get_logger
 import logging
 from method.evaluate import Evaluator
@@ -13,7 +14,7 @@ logger = get_logger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description='Bug Localization Tool')
-    parser.add_argument('--method', choices=['openai', 'openai-free', 'unsloth'], 
+    parser.add_argument('--method', choices=['openai', 'openai-free', 'unsloth', 'openrouter'], 
                        default='unsloth', help='Localization method to use')
     parser.add_argument('--dataset', choices=['swebench', 'beetlebox'], 
                        default='beetlebox', help='Dataset to use')
@@ -45,6 +46,8 @@ def main():
                 model=args.model,
                 device=device
             )
+        elif args.method == 'openrouter':
+            localizer = OpenRouterLocalizer(model=args.model)
         else:
             raise ValueError(f"Unknown method: {args.method}")
         
