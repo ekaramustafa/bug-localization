@@ -42,16 +42,23 @@ class SWEBench(BugLocalizationDataset):
             logger.warning("Data not loaded, attempting to load...")
             self.load_data()
         
-        if self._bug_instances:
+        if self._bug_instances and sample_size is None:
             logger.debug(f"Returning cached bug instances: {len(self._bug_instances)}")
-            if sample_size is not None and sample_size < len(self._bug_instances):
+            return self._bug_instances
+        
+        if self._bug_instances and sample_size is not None:
+            if sample_size >= len(self._bug_instances):
+                logger.debug(f"Sample size {sample_size} >= cached instances {len(self._bug_instances)}, returning all cached")
+                return self._bug_instances
+            else:
+                logger.debug(f"Sampling {sample_size} from {len(self._bug_instances)} cached instances")
                 if random_sample:
+                    import random
                     if random_seed is not None:
                         random.seed(random_seed)
                     return random.sample(self._bug_instances, sample_size)
                 else:
                     return self._bug_instances[:sample_size]
-            return self._bug_instances
 
         logger.info("Processing bug instances...")
         
@@ -61,6 +68,16 @@ class SWEBench(BugLocalizationDataset):
         else:
             bug_instances = self.data
 
+        if sample_size is not None and sample_size < len(bug_instances):
+            logger.info(f"Sampling {sample_size} instances from {len(bug_instances)} total instances")
+            if random_sample:
+                import random
+                if random_seed is not None:
+                    random.seed(random_seed)
+                bug_instances = random.sample(bug_instances, sample_size)
+            else:
+                bug_instances = bug_instances[:sample_size]
+
         logger.info(f"Processing {len(bug_instances)} bug instances...")
 
         
@@ -69,11 +86,6 @@ class SWEBench(BugLocalizationDataset):
                 logger.debug(f"Processed {i}/{len(bug_instances)} bug instances")
                 
             temp_id = str(i)
-
-            ## DEBUGGING PURPOSES
-            # if bug["repo"] != "astropy/astropy":
-            #     continue
-
             
             patch = bug.get('patch', '') # patch contains the code fix on the bug
             modified_files = []
@@ -98,7 +110,6 @@ class SWEBench(BugLocalizationDataset):
                 hints_text=bug['hints_text'],
                 ground_truths=bug['ground_truths'],
                 bug_report=bug['bug_report'],
-                # code_files=["Nothing"],
                 code_files=code_files,
             )
             self._bug_instances.append(bug_instance)
