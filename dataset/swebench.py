@@ -64,8 +64,8 @@ class SWEBench(BugLocalizationDataset):
             temp_id = str(i)
 
             ## DEBUGGING PURPOSES
-            if bug["repo"] != "astropy/astropy":
-                continue
+            # if bug["repo"] != "astropy/astropy":
+            #     continue
 
             
             patch = bug.get('patch', '') # patch contains the code fix on the bug

@@ -203,4 +203,5 @@ results/
 temp/
 tmp/
 =*
-unsloth_compiled_cache*
+unsloth_compiled_cache*]
+.kiro
