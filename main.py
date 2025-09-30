@@ -2,7 +2,7 @@ from dataset.swebench import SWEBench
 from dataset.beetlebox import BeetleBox
 from method.openai_localizer import OpenAILocalizer
 from method.openai_free_localizer import OpenAIFreeLocalizer
-from method.opensource_localizer import OpenSourceLocalizer
+# from method.opensource_localizer import OpenSourceLocalizer
 from method.openrouter_localizer import OpenRouterLocalizer
 from dataset.utils import setup_logging, get_logger
 import logging
@@ -15,10 +15,10 @@ logger = get_logger(__name__)
 def main():
     parser = argparse.ArgumentParser(description='Bug Localization Tool')
     parser.add_argument('--method', choices=['openai', 'openai-free', 'unsloth', 'openrouter'], 
-                       default='unsloth', help='Localization method to use')
+                       default='openrouter', help='Localization method to use')
     parser.add_argument('--dataset', choices=['swebench', 'beetlebox'], 
                        default='beetlebox', help='Dataset to use')
-    parser.add_argument('--model', default='qwen3_4b_instruct', 
+    parser.add_argument('--model', default='qwen-coder', 
                        help='Model to use (for HuggingFace: gpt-oss, gpt-oss-120b, etc.)')
     parser.add_argument('--device', choices=['cuda', 'cpu', 'auto'], 
                        default='auto', help='Device for local inference (HuggingFace only)')

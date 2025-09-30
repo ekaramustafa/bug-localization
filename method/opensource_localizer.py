@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 from method.base import BugLocalizationMethod
 from method.prompt import PromptGenerator
-from method.models import OpenAILocalizerResponse
+from method.models import OpenAILocalizerResponse, DirectorySelectionResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from dataset.utils import get_token_count, get_logger
@@ -25,9 +25,6 @@ except ImportError:
 
 logger = get_logger(__name__)
 
-class DirectorySelectionResponse(BaseModel):
-    selected_directory: Optional[str] = None
-    selected_files: List[str] = []
 
 class OpenSourceLocalizer(BugLocalizationMethod):
     def __init__(self, model="gpt-oss", device=None, max_seq_length=16384, 
@@ -65,16 +62,16 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         model_name = self.model_mapping.get(self.model, self.model)
         logger.info(f"Loading model: {model_name}")
         
-            self.unsloth_model, self.unsloth_tokenizer = FastLanguageModel.from_pretrained(
+        self.unsloth_model, self.unsloth_tokenizer = FastLanguageModel.from_pretrained(
                 model_name=model_name,
             dtype=self.dtype,
                 max_seq_length=self.max_seq_length,
             load_in_4bit=self.load_in_4bit,
             full_finetuning=False,
-            )
-            
-            self.unsloth_model = FastLanguageModel.get_peft_model(
-                self.unsloth_model,
+        )
+        
+        self.unsloth_model = FastLanguageModel.get_peft_model(
+            self.unsloth_model,
             r=8,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
                 lora_alpha=16,
@@ -90,7 +87,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         
         messages = [{"role": "user", "content": prompt}]
         
-            inputs = self.unsloth_tokenizer.apply_chat_template(
+        inputs = self.unsloth_tokenizer.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
                 return_tensors="pt",
@@ -98,7 +95,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             reasoning_effort="medium",
             ).to(self.unsloth_model.device)
             
-            output = self.unsloth_model.generate(
+        output = self.unsloth_model.generate(
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=True,
@@ -107,12 +104,12 @@ class OpenSourceLocalizer(BugLocalizationMethod):
                 eos_token_id=self.unsloth_tokenizer.eos_token_id,
             )
             
-            generated_text = self.unsloth_tokenizer.decode(
+        generated_text = self.unsloth_tokenizer.decode(
                 output[0][inputs['input_ids'].shape[1]:], 
                 skip_special_tokens=True
-            )
+        )
             
-            return generated_text.strip()
+        return generated_text.strip()
                 
     def invoke(self, prompt: str, model_type: Optional[str] = None) -> str:
         return self._generate_text(prompt)
@@ -179,22 +176,24 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             options.extend([f"FILE: {name}" for name in file_names])
         
         prompt = f"""
-You are given a mixed list of directories and files along with bug_report.
-Your task is to hierarchically extract the possible directories to get the candidate files.
-You must use the provided json_schema to output your result
+            You are given a mixed list of directories and files along with bug_report.
+            Your task is to hierarchically extract the possible directories to get the candidate files.
+            You must use the provided json_schema to output your result
 
-Bug: {bug.bug_report[:1000]}
+            Bug: {bug.bug_report[:1000]}
 
-Current path: {current_path or 'root'}
-Available options:
-{chr(10).join(options)}
+            Current path: {current_path or 'root'}
+            Available options:
+            {chr(10).join(options)}
 
-Select ONE of:
-1. Directory name to explore (set selected_directory field)
-2. File names to add as candidates (set selected_files field with just names, no "FILE:" prefix)  
-3. Leave both fields empty if no relevant options
+            Select ONE of:
+            1. Directory name to explore (set selected_directory field)
+            2. File names to add as candidates (set selected_files field with just names, no "FILE:" prefix)  
+            3. Leave both fields empty if no relevant options
 
-You must use the provided json schema for your output"""
+            You must use the provided json schema for your output
+
+        """
         
         response = self.invoke_structured(prompt, DirectorySelectionResponse)
         

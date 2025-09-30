@@ -45,8 +45,8 @@ def get_code_files(repo, commit_hash, extensions, token=None):
     r.raise_for_status()
 
     tree = r.json()["tree"]
-    py_files = [item["path"] for item in tree if item["type"] == "blob" and item["path"].endswith(extensions)]
-    return py_files
+    selected_files = [item["path"] for item in tree if item["type"] == "blob" and item["path"].endswith(extensions)]
+    return selected_files
 
 def get_token_count(text: str, model: str = "gpt-4") -> int:
     """
