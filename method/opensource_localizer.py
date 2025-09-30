@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 
 class OpenSourceLocalizer(BugLocalizationMethod):
     def __init__(self, model="gpt-oss", device=None, max_seq_length=16384, 
-                 max_new_tokens=4096, dtype=None, load_in_4bit=True):
+                 max_new_tokens=4096, dtype=None, load_in_4bit=True, temperature=0.7):
         super().__init__()
         load_dotenv()
         
@@ -37,11 +37,9 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         self.max_new_tokens = max_new_tokens
         self.dtype = dtype
         self.load_in_4bit = load_in_4bit
-        
+        self.temperature = temperature
         self.model_mapping = {
             "gpt-oss": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
-            "gpt-oss-120b": "unsloth/gpt-oss-120b-unsloth-bnb-4bit", 
-            "openai-free": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
             "gpt-oss-20b": "unsloth/gpt-oss-20b-unsloth-bnb-4bit",
             "qwen3_4b_instruct": "unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit"
         }
@@ -74,7 +72,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             self.unsloth_model,
             r=8,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-                lora_alpha=16,
+            lora_alpha=16,
             lora_dropout=0,
             bias="none",
             use_gradient_checkpointing="unsloth",
@@ -99,7 +97,7 @@ class OpenSourceLocalizer(BugLocalizationMethod):
                 **inputs,
                 max_new_tokens=self.max_new_tokens,
                 do_sample=True,
-                temperature=0.7,
+                temperature=self.temperature,
                 pad_token_id=self.unsloth_tokenizer.eos_token_id,
                 eos_token_id=self.unsloth_tokenizer.eos_token_id,
             )
@@ -110,14 +108,10 @@ class OpenSourceLocalizer(BugLocalizationMethod):
         )
             
         return generated_text.strip()
-                
-    def invoke(self, prompt: str, model_type: Optional[str] = None) -> str:
-        return self._generate_text(prompt)
 
     def invoke_structured(self, prompt: str, text_format) -> OpenAILocalizerResponse:
         response_text = self._generate_text(prompt)
         
-        # Extract JSON from response
         json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
         json_text = json_match.group(0) if json_match else response_text
         
@@ -128,128 +122,6 @@ class OpenSourceLocalizer(BugLocalizationMethod):
             logger.warning(f"Failed to parse JSON: {e}")
             return text_format(candidate_files=[])
 
-
-    def _get_hierarchical_files(self, bug, code_files):
-        if not code_files:
-            return []
-        
-        # Group files by their directory structure
-        file_tree = {}
-        for file_path in code_files:
-            # Handle both forward and backward slashes
-            parts = file_path.replace('\\', '/').split('/')
-            current = file_tree
-            for part in parts[:-1]:  # All except filename
-                if part and part not in current:  # Skip empty parts
-                    current[part] = {}
-                    current = current[part]
-                elif part in current:
-                    current = current[part]
-            # Add filename to the directory
-            if '_files' not in current:
-                current['_files'] = []
-            current['_files'].append(file_path)
-        
-        # Start exploration from root
-        selected_files = []
-        self._explore_tree(bug, file_tree, selected_files, "")
-        
-        return selected_files
-
-    def _explore_tree(self, bug, tree, selected_files, current_path, max_depth=5):
-        if max_depth <= 0:
-            return
-        
-        # Get directories and files at current level
-        directories = [k for k in tree.keys() if k != '_files']
-        files = tree.get('_files', [])
-        
-        if not directories and not files:
-            return
-        
-        # Present options to LLM
-        options = []
-        if directories:
-            options.extend([f"DIR: {d}" for d in directories[:10]])
-        if files:
-            file_names = [os.path.basename(f) for f in files[:20]]
-            options.extend([f"FILE: {name}" for name in file_names])
-        
-        prompt = f"""
-            You are given a mixed list of directories and files along with bug_report.
-            Your task is to hierarchically extract the possible directories to get the candidate files.
-            You must use the provided json_schema to output your result
-
-            Bug: {bug.bug_report[:1000]}
-
-            Current path: {current_path or 'root'}
-            Available options:
-            {chr(10).join(options)}
-
-            Select ONE of:
-            1. Directory name to explore (set selected_directory field)
-            2. File names to add as candidates (set selected_files field with just names, no "FILE:" prefix)  
-            3. Leave both fields empty if no relevant options
-
-            You must use the provided json schema for your output
-
-        """
-        
-        response = self.invoke_structured(prompt, DirectorySelectionResponse)
-        
-        # Handle directory selection
-        if response.selected_directory:
-            for d in directories:
-                if d.lower() == response.selected_directory.lower():
-                    next_path = os.path.join(current_path, d) if current_path else d
-                    self._explore_tree(bug, tree[d], selected_files, next_path, max_depth - 1)
-                    return
-        
-        # Handle file selection
-        if response.selected_files:
-            for file_path in files:
-                file_name = os.path.basename(file_path)
-                if any(file_name.lower() == sf.lower() for sf in response.selected_files):
-                    selected_files.append(file_path)
-
     def localize(self, bug):
-        available_tokens = self.max_seq_length - self.max_new_tokens - 250
-        
-        # Try direct processing first
         full_prompt = self.prompt_generator.generate_openai_prompt(bug)
-        if get_token_count(full_prompt, model="gpt-4o") <= available_tokens:
-            return self.invoke_structured(full_prompt, OpenAILocalizerResponse)
-        
-        # Use hierarchical approach to select relevant files
-        selected_files = self._get_hierarchical_files(bug, bug.code_files)
-        
-        if not selected_files:
-            return OpenAILocalizerResponse(candidate_files=[])
-        
-        # Create prompt with selected files
-        selected_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files)
-        
-        # If still too large, take first batch that fits
-        if get_token_count(selected_prompt, model="gpt-4o") > available_tokens:
-            for i in range(len(selected_files), 0, -1):
-                subset_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files[:i])
-                if get_token_count(subset_prompt, model="gpt-4o") <= available_tokens:
-                    return self.invoke_structured(subset_prompt, OpenAILocalizerResponse)
-            return OpenAILocalizerResponse(candidate_files=[])
-        
-        return self.invoke_structured(selected_prompt, OpenAILocalizerResponse)
-
-
-    def cleanup(self):
-        if self.unsloth_model is not None:
-            del self.unsloth_model
-            del self.unsloth_tokenizer
-            
-        if torch and torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    def __del__(self):
-        try:
-            self.cleanup()
-        except:
-            pass
+        self.invoke_structured(full_prompt, OpenAILocalizerResponse)
