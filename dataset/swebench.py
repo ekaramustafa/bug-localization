@@ -37,13 +37,20 @@ class SWEBench(BugLocalizationDataset):
             logger.error(f"Failed to load SWEBench dataset: {e}")
             raise
 
-    def get_bug_instances(self):
+    def get_bug_instances(self, sample_size=None, random_sample=False, random_seed=None):
         if self.data is None:
             logger.warning("Data not loaded, attempting to load...")
             self.load_data()
         
         if self._bug_instances:
             logger.debug(f"Returning cached bug instances: {len(self._bug_instances)}")
+            if sample_size is not None and sample_size < len(self._bug_instances):
+                if random_sample:
+                    if random_seed is not None:
+                        random.seed(random_seed)
+                    return random.sample(self._bug_instances, sample_size)
+                else:
+                    return self._bug_instances[:sample_size]
             return self._bug_instances
 
         logger.info("Processing bug instances...")

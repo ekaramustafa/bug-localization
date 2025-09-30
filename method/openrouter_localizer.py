@@ -189,7 +189,7 @@ class OpenRouterLocalizer(BugLocalizationMethod):
         logger.info(f"RAG selection completed, selected {len(selected_files)} files")
         return selected_files
 
-    def localize(self, bug):
+    def localize(self, bug, rag=False):
         logger.info(f"Starting bug localization for instance: {bug.instance_id}")
         logger.info(f"Repository: {bug.repo}")
         logger.info(f"Total code files: {len(bug.code_files) if bug.code_files else 0}")
@@ -199,32 +199,36 @@ class OpenRouterLocalizer(BugLocalizationMethod):
             return OpenAILocalizerResponse(candidate_files=[])
         
         
-        logger.info("Using RAG file selection to reduce context size")
-        try:
+        if rag:
+            logger.info("Using RAG file selection to reduce context size")
+            try:
+                file_contents = fetch_file_contents_from_github(bug)
+                selected_files = self._get_rag_files(bug, bug.code_files, file_contents)
+                
+                if not selected_files:
+                    logger.warning("RAG selection returned no files")
+                    return OpenAILocalizerResponse(candidate_files=[])
+                
+                logger.info(f"RAG selection chose {len(selected_files)} files")
+                logger.debug(f"Selected files: {selected_files[:10]}...")
+                
+                selected_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files)
+                selected_prompt_tokens = get_token_count(selected_prompt, model="gpt-4o")
+                
+                logger.info(f"Selected files prompt token count: {selected_prompt_tokens}")
+                
+                if selected_prompt_tokens > available_tokens:
+                    logger.warning(f"Selected files prompt still too large ({selected_prompt_tokens} tokens)")
+                    return None
+                
+                response = self.invoke_structured(selected_prompt, OpenAILocalizerResponse)
+                logger.info(f"RAG processing successful, found {len(response.candidate_files)} candidates")
+                return response
+                
+            except Exception as e:
+                logger.error(f"RAG processing failed: {e}")
+                return self._minimal_context_fallback(bug, available_tokens)
+        else:
+            prompt = self.prompt_generator.generate_openai_prompt(bug)
+            return self.invoke_structured(prompt, OpenAILocalizerResponse)
             
-            file_contents = fetch_file_contents_from_github(bug)
-            selected_files = self._get_rag_files(bug, bug.code_files, file_contents)
-            
-            if not selected_files:
-                logger.warning("RAG selection returned no files")
-                return OpenAILocalizerResponse(candidate_files=[])
-            
-            logger.info(f"RAG selection chose {len(selected_files)} files")
-            logger.debug(f"Selected files: {selected_files[:10]}...")
-            
-            selected_prompt = self.prompt_generator.generate_openai_prompt(bug, selected_files)
-            selected_prompt_tokens = get_token_count(selected_prompt, model="gpt-4o")
-            
-            logger.info(f"Selected files prompt token count: {selected_prompt_tokens}")
-            
-            if selected_prompt_tokens > available_tokens:
-                logger.warning(f"Selected files prompt still too large ({selected_prompt_tokens} tokens)")
-                return None
-            
-            response = self.invoke_structured(selected_prompt, OpenAILocalizerResponse)
-            logger.info(f"RAG processing successful, found {len(response.candidate_files)} candidates")
-            return response
-            
-        except Exception as e:
-            logger.error(f"RAG processing failed: {e}")
-            return self._minimal_context_fallback(bug, available_tokens)
