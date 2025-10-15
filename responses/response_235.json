@@ -1,0 +1,7 @@
+{
+    "bug_id": "235",
+    "ground_truths": [
+        "django/contrib/admin/widgets.py"
+    ],
+    "response": "candidate_files=['N/A']"
+}

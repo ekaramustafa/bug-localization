@@ -1,0 +1,7 @@
+{
+    "bug_id": "224",
+    "ground_truths": [
+        "django/contrib/staticfiles/storage.py"
+    ],
+    "response": "candidate_files=['django/contrib/staticfiles/storage.py']"
+}

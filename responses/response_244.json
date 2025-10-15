@@ -1,0 +1,9 @@
+{
+    "bug_id": "244",
+    "ground_truths": [
+        "django/conf/global_settings.py",
+        "django/core/checks/security/base.py",
+        "django/middleware/clickjacking.py"
+    ],
+    "response": "candidate_files=[]"
+}

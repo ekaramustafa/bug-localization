@@ -1,0 +1,7 @@
+{
+    "bug_id": "241",
+    "ground_truths": [
+        "django/db/migrations/autodetector.py"
+    ],
+    "response": "candidate_files=[]"
+}

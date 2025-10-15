@@ -20,16 +20,8 @@ class OpenAILocalizer(BugLocalizationMethod):
         self.llm = LLMClientGenerator(api_key=self.api_key)
         self.prompt_generator = PromptGenerator()
 
-    def localize(self, bug, max_prompt_tokens=16000, max_chunk_tokens=8000):
-        """
-        Localize bugs with intelligent chunking strategy.
-        
-        Args:
-            bug: BugInstance object
-            max_prompt_tokens: Maximum total tokens per prompt (default: 16k for gpt-4o)
-            max_chunk_tokens: Maximum tokens per code file chunk (default: 8k)
-        """
-        model = "gpt-4o"
+    def localize(self, bug, max_prompt_tokens=100000, max_chunk_tokens=50000):
+        model = "gpt-5-nano"
         
         # Count tokens in the bug report using the utility function
         token_count = get_token_count(bug.to_string(), model=model)

@@ -5,7 +5,7 @@ from dataset.base import BugLocalizationDataset
 import logging
 from datasets import load_dataset
 from dataset.models import BugInstance
-from dataset.utils import get_code_files, calculate_dataset_token_stats
+from dataset.utils import get_code_files, calculate_dataset_token_stats, is_code_file, filter_code_paths
 from dotenv import load_dotenv
 from datetime import datetime
 import re
@@ -78,7 +78,6 @@ class BeetleBox(BugLocalizationDataset):
         if self.language_filter:
             return extension_map.get(self.language_filter.lower(), ('.py', '.java', '.cpp', '.js', '.go'))
         else:
-            # Return all extensions if no filter
             all_extensions = []
             for exts in extension_map.values():
                 all_extensions.extend(exts)
@@ -118,13 +117,6 @@ class BeetleBox(BugLocalizationDataset):
             return None
 
     def get_bug_instances(self, sample_size=None, random_sample=False, random_seed=None):
-        """Process and return bug instances from the BeetleBox dataset.
-        
-        Args:
-            sample_size: Number of instances to process (None for all)
-            random_sample: If True, randomly sample instances instead of taking first N
-            random_seed: Random seed for reproducible sampling
-        """
         if self.data is None:
             logger.warning("Data not loaded, attempting to load...")
             self.load_data()
@@ -142,14 +134,12 @@ class BeetleBox(BugLocalizationDataset):
 
         logger.info("Processing bug instances...")
         
-        # Convert dataset to list of dictionaries
         if hasattr(self.data, 'to_dict'):
             bug_instances = [dict(zip(self.data.features.keys(), instance)) 
                                   for instance in zip(*self.data.to_dict().values())]
         else:
             bug_instances = self.data
 
-        # Apply sampling if requested
         if sample_size is not None and sample_size < len(bug_instances):
             if random_sample:
                 if random_seed is not None:
@@ -169,7 +159,6 @@ class BeetleBox(BugLocalizationDataset):
             if i % 100 == 0: 
                 logger.debug(f"Processed {i}/{len(bug_instances)} bug instances")
             
-            # Apply filters
             if self.language_filter and bug.get('language', '').lower() != self.language_filter.lower():
                 continue
                 
@@ -177,29 +166,27 @@ class BeetleBox(BugLocalizationDataset):
                 continue
             
             try:
-                # Extract repository name and create a standardized format
                 repo_name = bug.get('repo_name', '')
                 repo_url = bug.get('repo_url', '')
                 
-                # Create bug report text from title and body
                 title = bug.get('title', '')
                 body = bug.get('body', '')
                 bug_report = f"Title: {title}\n\nDescription:\n{body}"
                 
-                # Get ground truth files
                 updated_files = bug.get('updated_files', [])
                 if isinstance(updated_files, str):
-                    # If it's a string, try to parse it as a list
                     try:
                         updated_files = eval(updated_files) if updated_files else []
                     except:
                         updated_files = [updated_files] if updated_files else []
+                # Keep only code-file ground truths; skip instance if none remain
+                updated_files = [p for p in updated_files if isinstance(p, str) and p.endswith(self.extensions)]
+                if not updated_files:
+                    continue
                 
-                # Get commit information
                 before_commit = bug.get('before_fix_sha', '')
                 after_commit = bug.get('after_fix_sha', '')
                 
-                # Get code files from repository if we have commit info
                 code_files = []
                 if repo_name and before_commit:
                     try:
@@ -208,12 +195,11 @@ class BeetleBox(BugLocalizationDataset):
                         logger.warning(f"Failed to get code files for {repo_name}@{before_commit}: {e}")
                         code_files = []
                 
-                # Create BugInstance
                 bug_instance = BugInstance(
                     instance_id=str(bug.get('issue_id', i)),
                     repo=repo_name,
                     base_commit=before_commit,
-                    patch=f"Before: {before_commit}\nAfter: {after_commit}",  # BeetleBox doesn't have patch, so we store commit info
+                    patch=f"Before: {before_commit}\nAfter: {after_commit}", 
                     hints_text=f"Status: {bug.get('status', '')}\nLanguage: {bug.get('language', '')}\nIssue URL: {bug.get('issue_url', '')}\nPR URL: {bug.get('pull_url', '')}",
                     ground_truths=updated_files,
                     bug_report=bug_report,

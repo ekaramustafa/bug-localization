@@ -6,10 +6,13 @@ class Evaluator:
     def evaluate(self, responses, k=1):
         results = {}
         for instance_id, data in responses.items():
-            bug = data['bug']
             response = data['response']
             candidate_files = response.candidate_files
-            ground_truths = bug.ground_truths
+            ground_truths = []
+            if 'bug' in data:
+                ground_truths = data['bug'].ground_truths
+            else:
+                ground_truths = data['ground_truths']
             results[instance_id] = self._evaluate_candidate_files(candidate_files, ground_truths, k)
         
         overall = self._calculate_overall_metrics(results)

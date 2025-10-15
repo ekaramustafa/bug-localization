@@ -1,0 +1,7 @@
+{
+    "bug_id": "228",
+    "ground_truths": [
+        "django/utils/http.py"
+    ],
+    "response": "candidate_files=['django/core/handlers/base.py', 'django/http/response.py', 'django/test/client.py', 'django/core/exceptions.py']"
+}

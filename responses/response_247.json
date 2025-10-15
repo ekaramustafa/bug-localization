@@ -1,0 +1,7 @@
+{
+    "bug_id": "247",
+    "ground_truths": [
+        "django/contrib/auth/forms.py"
+    ],
+    "response": "candidate_files=[]"
+}

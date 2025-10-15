@@ -1,7 +1,7 @@
 import logging
 import sys
 from datetime import datetime
-import tiktoken  # You'll need to install: pip install tiktoken
+import tiktoken 
 
 def setup_logging(level=logging.INFO, log_file=None):
     formatter = logging.Formatter(
@@ -33,7 +33,6 @@ def get_logger(name):
     return logging.getLogger(name)
 
 
-
 import requests
 
 def get_code_files(repo, commit_hash, extensions, token=None):
@@ -47,6 +46,21 @@ def get_code_files(repo, commit_hash, extensions, token=None):
     tree = r.json()["tree"]
     selected_files = [item["path"] for item in tree if item["type"] == "blob" and item["path"].endswith(extensions)]
     return selected_files
+
+def is_code_file(path: str, extensions) -> bool:
+    """
+    Return True if the given path ends with one of the allowed code file extensions.
+    Accepts either a tuple of extensions or a single string extension.
+    """
+    return isinstance(path, str) and path.endswith(extensions)
+
+def filter_code_paths(paths: list[str], extensions) -> list[str]:
+    """
+    Filter a list of file paths to only those that are code files per the given extensions.
+    """
+    if not paths:
+        return []
+    return [p for p in paths if is_code_file(p, extensions)]
 
 def get_token_count(text: str, model: str = "gpt-4") -> int:
     """

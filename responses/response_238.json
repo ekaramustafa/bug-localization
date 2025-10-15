@@ -1,0 +1,7 @@
+{
+    "bug_id": "238",
+    "ground_truths": [
+        "django/contrib/admin/templatetags/admin_modify.py"
+    ],
+    "response": "candidate_files=[]"
+}

@@ -1,0 +1,8 @@
+{
+    "bug_id": "52",
+    "ground_truths": [
+        "astropy/units/format/cds.py",
+        "astropy/units/format/cds_parsetab.py"
+    ],
+    "response": "candidate_files=['astropy/units/format/cds.py (Confidence: 95%)', 'astropy/table/mrt.py (Confidence: 85%)']"
+}

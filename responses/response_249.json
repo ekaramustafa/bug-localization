@@ -1,0 +1,16 @@
+{
+    "bug_id": "249",
+    "ground_truths": [
+        "django/contrib/messages/storage/base.py",
+        "django/contrib/postgres/constraints.py",
+        "django/core/validators.py",
+        "django/db/models/base.py",
+        "django/db/models/constraints.py",
+        "django/db/models/expressions.py",
+        "django/db/models/indexes.py",
+        "django/db/models/query.py",
+        "django/db/models/query_utils.py",
+        "django/template/context.py"
+    ],
+    "response": "candidate_files=['django/db/models/base.py']"
+}

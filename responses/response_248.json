@@ -1,0 +1,7 @@
+{
+    "bug_id": "248",
+    "ground_truths": [
+        "django/db/models/lookups.py"
+    ],
+    "response": "candidate_files=['django/db/models/lookups.py', 'django/db/models/query.py', 'django/contrib/auth/models.py']"
+}

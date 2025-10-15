@@ -1,0 +1,7 @@
+{
+    "bug_id": "243",
+    "ground_truths": [
+        "django/core/management/__init__.py"
+    ],
+    "response": "candidate_files=[]"
+}

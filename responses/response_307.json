@@ -1,0 +1,7 @@
+{
+    "bug_id": "307",
+    "ground_truths": [
+        "django/core/checks/translation.py"
+    ],
+    "response": "candidate_files=[]"
+}
