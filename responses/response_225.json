@@ -1,0 +1,7 @@
+{
+    "bug_id": "225",
+    "ground_truths": [
+        "django/views/debug.py"
+    ],
+    "response": "candidate_files=[]"
+}

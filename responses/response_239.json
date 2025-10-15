@@ -1,0 +1,7 @@
+{
+    "bug_id": "239",
+    "ground_truths": [
+        "django/contrib/admindocs/utils.py"
+    ],
+    "response": "candidate_files=['django/contrib/admindocs/utils.py']"
+}

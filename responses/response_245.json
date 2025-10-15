@@ -1,0 +1,9 @@
+{
+    "bug_id": "245",
+    "ground_truths": [
+        "django/conf/global_settings.py",
+        "django/utils/log.py",
+        "django/views/debug.py"
+    ],
+    "response": "candidate_files=[]"
+}

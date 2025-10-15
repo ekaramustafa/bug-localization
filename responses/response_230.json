@@ -1,0 +1,7 @@
+{
+    "bug_id": "230",
+    "ground_truths": [
+        "django/views/generic/base.py"
+    ],
+    "response": "candidate_files=['django/views/generic/base.py', 'django/views/generic/detail.py', 'django/views/generic/list.py', 'django/views/generic/edit.py', 'django/views/generic/template.py']"
+}

@@ -1,0 +1,8 @@
+{
+    "bug_id": "234",
+    "ground_truths": [
+        "django/db/models/sql/compiler.py",
+        "django/db/models/sql/query.py"
+    ],
+    "response": "candidate_files=[]"
+}

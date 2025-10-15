@@ -1,0 +1,7 @@
+{
+    "bug_id": "190",
+    "ground_truths": [
+        "django/utils/functional.py"
+    ],
+    "response": "candidate_files=['django/utils/functional.py']"
+}

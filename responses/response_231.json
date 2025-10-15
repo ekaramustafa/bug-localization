@@ -1,0 +1,7 @@
+{
+    "bug_id": "231",
+    "ground_truths": [
+        "django/db/models/sql/where.py"
+    ],
+    "response": "candidate_files=[]"
+}

@@ -6,7 +6,7 @@ import logging
 import re
 from datasets import load_dataset
 from dataset.models import BugInstance
-from dataset.utils import get_code_files, calculate_dataset_token_stats
+from dataset.utils import get_code_files, calculate_dataset_token_stats, is_code_file, filter_code_paths
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ class SWEBench(BugLocalizationDataset):
         load_dotenv()
         self.token = os.getenv("GITHUB_TOKEN")
         if not self.token:
-            logger.warning("⚠️ GITHUB_TOKEN not found in environment. You may hit rate limits.")
+            logger.warning("GITHUB_TOKEN not found in environment. You may hit rate limits.")
 
         logger.info("Initializing SWEBench dataset")
         self.dataset_name = "SWEBench"
@@ -94,6 +94,10 @@ class SWEBench(BugLocalizationDataset):
                     match = re.search(r'diff --git a/(.*) b/(.*)', line)
                     if match:
                         modified_files.append(match.group(2))
+            # Keep only code-file ground truths; skip instance if none remain
+            modified_files = [p for p in modified_files if isinstance(p, str) and p.endswith(self.extensions)]
+            if not modified_files:
+                continue
             
             bug['ground_truths'] = modified_files
             

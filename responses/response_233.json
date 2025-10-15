@@ -1,0 +1,7 @@
+{
+    "bug_id": "233",
+    "ground_truths": [
+        "django/urls/resolvers.py"
+    ],
+    "response": "candidate_files=['django/urls/resolvers.py', 'django/urls/converters.py', 'tests/urls_tests.py']"
+}

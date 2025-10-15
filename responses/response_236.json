@@ -1,0 +1,7 @@
+{
+    "bug_id": "236",
+    "ground_truths": [
+        "django/contrib/admin/views/main.py"
+    ],
+    "response": "candidate_files=['django/contrib/admin/views/main.py', 'django/forms/fields.py', 'django/core/validators.py']"
+}

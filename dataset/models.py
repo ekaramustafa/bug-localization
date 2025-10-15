@@ -2,7 +2,6 @@ from pydantic import BaseModel
 import logging
 import sys
 from datetime import datetime
-import tiktoken  # You'll need to install: pip install tiktoken
 from dataset.utils import get_token_count
 
 
